@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
+import { readJsonResponse } from "@/lib/fetch-json";
 import type { Campaign, CampaignTarget } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +14,15 @@ const TARGET_STATUS_COLORS: Record<CampaignTarget["status"], string> = {
   skipped: "text-warning border-warning/40",
 };
 
+const GENERATE_PAUSE_MS = 1500;
+
+function needsDraft(target: CampaignTarget) {
+  return (
+    !target.generated_subject &&
+    (target.status === "pending" || target.status === "failed")
+  );
+}
+
 export default function CampaignDetailPage({
   params,
 }: {
@@ -22,6 +32,10 @@ export default function CampaignDetailPage({
   const [targets, setTargets] = useState<CampaignTarget[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [generateProgress, setGenerateProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [sending, setSending] = useState(false);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -32,9 +46,13 @@ export default function CampaignDetailPage({
     setError(null);
     try {
       const res = await fetch(`/api/campaigns/${params.id}`);
-      const data = await res.json();
+      const data = await readJsonResponse<{
+        campaign?: Campaign;
+        targets?: CampaignTarget[];
+        error?: string;
+      }>(res);
       if (!res.ok) throw new Error(data.error || "Failed to load campaign");
-      setCampaign(data.campaign);
+      setCampaign(data.campaign ?? null);
       setTargets(data.targets ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load");
@@ -52,24 +70,93 @@ export default function CampaignDetailPage({
   ).length;
   const canSend = readyDrafts > 0 && !sending && campaign?.status !== "sending";
 
+  async function generateOneTarget(targetId: string) {
+    const res = await fetch(`/api/campaigns/${params.id}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId }),
+    });
+    const data = await readJsonResponse<{
+      generated?: number;
+      failed?: number;
+      error?: string;
+      rateLimited?: boolean;
+      target?: {
+        id: string;
+        generated_subject?: string;
+        generated_body?: string;
+        error_message?: string | null;
+      };
+    }>(res);
+
+    if (data.target) {
+      setTargets((prev) =>
+        prev.map((t) =>
+          t.id === data.target!.id
+            ? {
+                ...t,
+                generated_subject:
+                  data.target!.generated_subject ?? t.generated_subject,
+                generated_body: data.target!.generated_body ?? t.generated_body,
+                error_message: data.target!.error_message ?? null,
+              }
+            : t
+        )
+      );
+    }
+
+    if (!res.ok || (data.failed ?? 0) > 0) {
+      throw new Error(data.error || "Generation failed");
+    }
+
+    return data;
+  }
+
   async function handleGenerateAll() {
+    const queue = targets.filter(needsDraft);
+    if (queue.length === 0) {
+      setMessage("All targets already have drafts.");
+      return;
+    }
+
     setGenerating(true);
     setMessage(null);
     setError(null);
+    setGenerateProgress({ done: 0, total: queue.length });
+
+    let generated = 0;
+    let failed = 0;
+
     try {
-      const res = await fetch(`/api/campaigns/${params.id}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Generation failed");
-      setMessage(`Generated ${data.generated} drafts (${data.failed} failed)`);
-      await loadCampaign();
+      for (let i = 0; i < queue.length; i++) {
+        try {
+          await generateOneTarget(queue[i].id);
+          generated++;
+        } catch (err) {
+          failed++;
+          const msg = err instanceof Error ? err.message : "Generation failed";
+          if (/rate limit/i.test(msg)) {
+            setError(`${msg} Stopped after ${generated} drafts.`);
+            break;
+          }
+        }
+
+        setGenerateProgress({ done: i + 1, total: queue.length });
+
+        if (i < queue.length - 1) {
+          await new Promise((r) => setTimeout(r, GENERATE_PAUSE_MS));
+        }
+      }
+
+      setMessage(
+        `Generated ${generated.toLocaleString()} drafts` +
+          (failed > 0 ? ` (${failed.toLocaleString()} failed)` : "")
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed");
     } finally {
       setGenerating(false);
+      setGenerateProgress(null);
     }
   }
 
@@ -77,14 +164,7 @@ export default function CampaignDetailPage({
     setRegeneratingId(targetId);
     setError(null);
     try {
-      const res = await fetch(`/api/campaigns/${params.id}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ targetId }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Regeneration failed");
-      await loadCampaign();
+      await generateOneTarget(targetId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Regeneration failed");
     } finally {
@@ -100,7 +180,11 @@ export default function CampaignDetailPage({
       const res = await fetch(`/api/campaigns/${params.id}/send`, {
         method: "POST",
       });
-      const data = await res.json();
+      const data = await readJsonResponse<{
+        sent?: number;
+        failed?: number;
+        error?: string;
+      }>(res);
       if (!res.ok) throw new Error(data.error || "Send failed");
       setMessage(`Sent ${data.sent} emails (${data.failed} failed)`);
       await loadCampaign();
@@ -169,7 +253,30 @@ export default function CampaignDetailPage({
             Generate at least one draft before sending.
           </p>
         ) : null}
+        {readyDrafts > 0 ? (
+          <p className="mt-3 font-mono text-xs text-muted">
+            {readyDrafts.toLocaleString()} of {targets.length.toLocaleString()}{" "}
+            drafts ready
+          </p>
+        ) : null}
       </div>
+
+      {generateProgress ? (
+        <div className="mb-4 panel p-4">
+          <p className="font-mono text-xs text-muted">
+            Generating {generateProgress.done.toLocaleString()} /{" "}
+            {generateProgress.total.toLocaleString()} drafts
+          </p>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-bg">
+            <div
+              className="h-full bg-accent transition-all"
+              style={{
+                width: `${(generateProgress.done / generateProgress.total) * 100}%`,
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {message ? (
         <p className="mb-4 rounded-lg border border-success/40 bg-success/10 px-3 py-2 font-mono text-xs text-success">
@@ -209,7 +316,7 @@ export default function CampaignDetailPage({
                   <button
                     type="button"
                     className="btn-secondary text-xs"
-                    disabled={regeneratingId === target.id || sending}
+                    disabled={regeneratingId === target.id || sending || generating}
                     onClick={() => void handleRegenerate(target.id)}
                   >
                     {regeneratingId === target.id ? "..." : "Regenerate"}

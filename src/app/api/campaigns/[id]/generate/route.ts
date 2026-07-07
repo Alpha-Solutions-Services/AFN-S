@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import {
-  GENERATION_DELAY_MS,
   generateEmailDraft,
   isRateLimitError,
   parseRetrySeconds,
@@ -9,7 +8,7 @@ import {
 import { sleep } from "@/lib/gmail";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 async function generateWithRetry(
   company: Parameters<typeof generateEmailDraft>[0]["company"],
@@ -21,7 +20,7 @@ async function generateWithRetry(
     const message = err instanceof Error ? err.message : "Generation failed";
     if (!isRateLimitError(message)) throw err;
 
-    const waitSec = parseRetrySeconds(message) ?? 60;
+    const waitSec = parseRetrySeconds(message) ?? 30;
     await sleep(waitSec * 1000);
     return await generateEmailDraft({ company, offerDescription });
   }
@@ -40,7 +39,14 @@ export async function POST(
   try {
     body = await request.json().catch(() => ({}));
   } catch {
-    // empty body is fine for generate-all
+    // ignore
+  }
+
+  if (!body.targetId) {
+    return NextResponse.json(
+      { error: "targetId is required — generate one target per request" },
+      { status: 400 }
+    );
   }
 
   const { data: campaign, error: campaignError } = await supabase
@@ -53,7 +59,7 @@ export async function POST(
     return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   }
 
-  let targetsQuery = supabase
+  const { data: target, error: targetError } = await supabase
     .from("campaign_targets")
     .select(
       `
@@ -70,79 +76,65 @@ export async function POST(
       )
     `
     )
-    .eq("campaign_id", campaignId);
+    .eq("campaign_id", campaignId)
+    .eq("id", body.targetId)
+    .single();
 
-  if (body.targetId) {
-    targetsQuery = targetsQuery.eq("id", body.targetId);
-  } else {
-    targetsQuery = targetsQuery.in("status", ["pending", "failed"]);
+  if (targetError || !target) {
+    return NextResponse.json({ error: "Target not found" }, { status: 404 });
   }
 
-  const { data: targets, error: targetsError } = await targetsQuery;
-  if (targetsError) {
-    return NextResponse.json({ error: targetsError.message }, { status: 500 });
+  const company = Array.isArray(target.companies)
+    ? target.companies[0]
+    : target.companies;
+
+  if (!company) {
+    return NextResponse.json({ error: "Company not found" }, { status: 404 });
   }
 
-  if (!targets || targets.length === 0) {
-    return NextResponse.json({ generated: 0, failed: 0 });
-  }
+  try {
+    const draft = await generateWithRetry(company, campaign.offer_description);
 
-  let generated = 0;
-  let failed = 0;
-  const errors: Array<{ targetId: string; error: string }> = [];
+    const { error: updateError } = await supabase
+      .from("campaign_targets")
+      .update({
+        generated_subject: draft.subject,
+        generated_body: draft.body,
+        error_message: null,
+      })
+      .eq("id", target.id);
 
-  for (let i = 0; i < targets.length; i++) {
-    const target = targets[i];
-    const company = Array.isArray(target.companies)
-      ? target.companies[0]
-      : target.companies;
-
-    if (!company) {
-      failed++;
-      errors.push({ targetId: target.id, error: "Company not found" });
-      continue;
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
 
-    try {
-      const draft = await generateWithRetry(company, campaign.offer_description);
+    return NextResponse.json({
+      generated: 1,
+      failed: 0,
+      target: {
+        id: target.id,
+        generated_subject: draft.subject,
+        generated_body: draft.body,
+        error_message: null,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Generation failed";
+    const friendly = isRateLimitError(message)
+      ? "AI rate limit hit — wait a minute and try again."
+      : message;
 
-      const { error: updateError } = await supabase
-        .from("campaign_targets")
-        .update({
-          generated_subject: draft.subject,
-          generated_body: draft.body,
-          error_message: null,
-        })
-        .eq("id", target.id);
+    await supabase
+      .from("campaign_targets")
+      .update({ error_message: friendly })
+      .eq("id", target.id);
 
-      if (updateError) {
-        failed++;
-        errors.push({ targetId: target.id, error: updateError.message });
-      } else {
-        generated++;
-      }
-    } catch (err) {
-      failed++;
-      const message = err instanceof Error ? err.message : "Generation failed";
-      const friendly = isRateLimitError(message)
-        ? "AI rate limit hit. Add GROQ_API_KEY (free at console.groq.com) or wait and retry."
-        : message;
-      errors.push({ targetId: target.id, error: friendly });
-
-      await supabase
-        .from("campaign_targets")
-        .update({ error_message: friendly })
-        .eq("id", target.id);
-
-      if (isRateLimitError(message)) {
-        break;
-      }
-    }
-
-    if (i < targets.length - 1) {
-      await sleep(GENERATION_DELAY_MS);
-    }
+    return NextResponse.json({
+      generated: 0,
+      failed: 1,
+      error: friendly,
+      rateLimited: isRateLimitError(message),
+      target: { id: target.id, error_message: friendly },
+    });
   }
-
-  return NextResponse.json({ generated, failed, errors });
 }
