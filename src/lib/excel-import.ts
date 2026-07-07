@@ -53,6 +53,20 @@ const FIELD_ALIASES: Record<string, keyof Omit<ParsedCompanyRow, "extra" | "stag
   note: "notes",
   comments: "notes",
   description: "notes",
+  physical_address: "notes",
+  mailing_address: "notes",
+  dot: "notes",
+  mc: "notes",
+  mc_dot: "notes",
+  mcs_number: "notes",
+  power_units: "notes",
+  drivers: "notes",
+  common_authority: "notes",
+  contract_authority: "notes",
+  broker_authority: "notes",
+  status: "notes",
+  state: "notes",
+  zip: "notes",
 };
 
 function normalizeHeader(header: unknown): string {
