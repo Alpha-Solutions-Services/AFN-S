@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { parseExcelBuffer, type ParsedCompanyRow } from "@/lib/excel-import";
-import { IMPORT_BATCH_SIZE, type ImportRowPayload } from "@/lib/import-batch";
+import { IMPORT_BATCH_SIZE, dedupePayload, type ImportRowPayload } from "@/lib/import-batch";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -29,8 +29,13 @@ async function upsertBatches(
   if (!supabase) throw new Error("Database not configured");
 
   let imported = 0;
+  let duplicates = 0;
   for (let i = 0; i < payload.length; i += IMPORT_BATCH_SIZE) {
-    const chunk = payload.slice(i, i + IMPORT_BATCH_SIZE);
+    const rawChunk = payload.slice(i, i + IMPORT_BATCH_SIZE);
+    const chunk = dedupePayload(rawChunk);
+    duplicates += rawChunk.length - chunk.length;
+    if (chunk.length === 0) continue;
+
     const { data, error } = await supabase
       .from("companies")
       .upsert(chunk, { onConflict: "owner_id,email", ignoreDuplicates: false })
@@ -39,7 +44,7 @@ async function upsertBatches(
     if (error) throw new Error(error.message);
     imported += data?.length ?? chunk.length;
   }
-  return imported;
+  return { imported, duplicates };
 }
 
 export async function POST(request: Request) {
@@ -80,13 +85,13 @@ export async function POST(request: Request) {
     }
 
     const payload = toPayload(rows, user.id);
-    const imported = await upsertBatches(supabase, payload);
+    const { imported, duplicates } = await upsertBatches(supabase, payload);
 
     return NextResponse.json({
       imported,
-      skipped: 0,
+      skipped: duplicates,
       totalRows: rows.length,
-      batches: Math.ceil(rows.length / IMPORT_BATCH_SIZE),
+      batches: Math.ceil(payload.length / IMPORT_BATCH_SIZE),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Import failed";

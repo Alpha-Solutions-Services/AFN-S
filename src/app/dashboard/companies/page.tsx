@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { StageBadge } from "@/components/StageBadge";
-import { parseExcelBuffer } from "@/lib/excel-import";
+import { dedupeByEmail, parseExcelBuffer } from "@/lib/excel-import";
 import { readJsonResponse } from "@/lib/fetch-json";
 import { IMPORT_BATCH_SIZE } from "@/lib/import-batch";
 import type { Company } from "@/lib/types";
@@ -61,7 +61,8 @@ export default function CompaniesPage() {
 
     try {
       const buffer = await file.arrayBuffer();
-      const rows = parseExcelBuffer(buffer);
+      const parsed = parseExcelBuffer(buffer);
+      const { rows, duplicates: parseDuplicates } = dedupeByEmail(parsed);
 
       if (rows.length === 0) {
         throw new Error("No valid rows with email addresses found in file");
@@ -70,6 +71,7 @@ export default function CompaniesPage() {
       setImportProgress({ done: 0, total: rows.length, phase: "importing" });
 
       let imported = 0;
+      let skipped = parseDuplicates;
       const batches = Math.ceil(rows.length / IMPORT_BATCH_SIZE);
 
       for (let i = 0; i < rows.length; i += IMPORT_BATCH_SIZE) {
@@ -81,11 +83,13 @@ export default function CompaniesPage() {
         });
         const data = await readJsonResponse<{
           imported?: number;
+          skipped?: number;
           error?: string;
         }>(res);
         if (!res.ok) throw new Error(data.error || "Import failed");
 
         imported += data.imported ?? batch.length;
+        skipped += data.skipped ?? 0;
         setImportProgress({
           done: Math.min(i + batch.length, rows.length),
           total: rows.length,
@@ -94,7 +98,9 @@ export default function CompaniesPage() {
       }
 
       setMessage(
-        `Imported ${imported.toLocaleString()} companies across ${batches.toLocaleString()} batches`
+        `Imported ${imported.toLocaleString()} companies` +
+          (skipped > 0 ? ` (${skipped.toLocaleString()} duplicate emails skipped)` : "") +
+          ` across ${batches.toLocaleString()} batches`
       );
       await loadCompanies(0);
     } catch (err) {

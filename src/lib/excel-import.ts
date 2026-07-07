@@ -145,3 +145,18 @@ export function parseExcelBuffer(buffer: ArrayBuffer): ParsedCompanyRow[] {
 
   return results;
 }
+
+/** Keep the last row per email — required before upsert (Postgres rejects duplicate conflict keys in one statement). */
+export function dedupeByEmail(rows: ParsedCompanyRow[]): {
+  rows: ParsedCompanyRow[];
+  duplicates: number;
+} {
+  const byEmail = new Map<string, ParsedCompanyRow>();
+  for (const row of rows) {
+    byEmail.set(row.email.toLowerCase(), row);
+  }
+  return {
+    rows: Array.from(byEmail.values()),
+    duplicates: rows.length - byEmail.size,
+  };
+}

@@ -16,6 +16,14 @@ export interface ImportRowPayload {
   stage: CompanyStage;
 }
 
+export function dedupePayload(rows: ImportRowPayload[]): ImportRowPayload[] {
+  const byEmail = new Map<string, ImportRowPayload>();
+  for (const row of rows) {
+    byEmail.set(row.email.toLowerCase(), row);
+  }
+  return Array.from(byEmail.values());
+}
+
 export interface ImportBatchResult {
   imported: number;
   skipped: number;
