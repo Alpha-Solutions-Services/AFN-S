@@ -1,0 +1,36 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-inter: "Inter", system-ui, sans-serif;
+  --font-jetbrains: "JetBrains Mono", ui-monospace, monospace;
+}
+
+body {
+  @apply bg-bg text-text antialiased;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-lg border border-border bg-panel;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-bg transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-lg border border-border bg-panel px-4 py-2 text-sm font-medium text-text transition-colors hover:border-muted disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text placeholder:text-muted focus:border-accent focus:outline-none;
+  }
+
+  .data-label {
+    @apply font-mono text-xs uppercase tracking-wide text-muted;
+  }
+}
