@@ -32,6 +32,13 @@ export async function middleware(request: NextRequest) {
   const isDashboard = pathname.startsWith("/dashboard");
   const isAuthCallback = pathname.startsWith("/auth");
 
+  // Supabase may redirect to Site URL (/) with ?code= when callback URL isn't whitelisted.
+  if (pathname === "/" && request.nextUrl.searchParams.has("code")) {
+    const callbackUrl = request.nextUrl.clone();
+    callbackUrl.pathname = "/auth/callback";
+    return NextResponse.redirect(callbackUrl);
+  }
+
   if (isDashboard && !user) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/";
