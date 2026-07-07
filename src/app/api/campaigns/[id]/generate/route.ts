@@ -1,6 +1,31 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
-import { generateEmailDraft } from "@/lib/gemini";
+import {
+  GENERATION_DELAY_MS,
+  generateEmailDraft,
+  isRateLimitError,
+  parseRetrySeconds,
+} from "@/lib/ai-email";
+import { sleep } from "@/lib/gmail";
+
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
+async function generateWithRetry(
+  company: Parameters<typeof generateEmailDraft>[0]["company"],
+  offerDescription: string
+) {
+  try {
+    return await generateEmailDraft({ company, offerDescription });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Generation failed";
+    if (!isRateLimitError(message)) throw err;
+
+    const waitSec = parseRetrySeconds(message) ?? 60;
+    await sleep(waitSec * 1000);
+    return await generateEmailDraft({ company, offerDescription });
+  }
+}
 
 export async function POST(
   request: Request,
@@ -66,7 +91,8 @@ export async function POST(
   let failed = 0;
   const errors: Array<{ targetId: string; error: string }> = [];
 
-  for (const target of targets) {
+  for (let i = 0; i < targets.length; i++) {
+    const target = targets[i];
     const company = Array.isArray(target.companies)
       ? target.companies[0]
       : target.companies;
@@ -78,10 +104,7 @@ export async function POST(
     }
 
     try {
-      const draft = await generateEmailDraft({
-        company,
-        offerDescription: campaign.offer_description,
-      });
+      const draft = await generateWithRetry(company, campaign.offer_description);
 
       const { error: updateError } = await supabase
         .from("campaign_targets")
@@ -101,12 +124,23 @@ export async function POST(
     } catch (err) {
       failed++;
       const message = err instanceof Error ? err.message : "Generation failed";
-      errors.push({ targetId: target.id, error: message });
+      const friendly = isRateLimitError(message)
+        ? "AI rate limit hit. Add GROQ_API_KEY (free at console.groq.com) or wait and retry."
+        : message;
+      errors.push({ targetId: target.id, error: friendly });
 
       await supabase
         .from("campaign_targets")
-        .update({ error_message: message })
+        .update({ error_message: friendly })
         .eq("id", target.id);
+
+      if (isRateLimitError(message)) {
+        break;
+      }
+    }
+
+    if (i < targets.length - 1) {
+      await sleep(GENERATION_DELAY_MS);
     }
   }
 
