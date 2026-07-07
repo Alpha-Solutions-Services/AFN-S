@@ -1,12 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { getSiteUrl } from "@/lib/supabase/env";
+import { getSiteUrl } from "@/lib/site-url";
 
-export default function LoginPage() {
+const OAUTH_ERRORS: Record<string, string> = {
+  access_denied:
+    "Google blocked sign-in. Add your Gmail as a test user in Google Cloud Console (OAuth consent screen → Test users).",
+  bad_oauth_state:
+    "Sign-in session expired. Keep `npm run dev` running, then click Continue with Google again without waiting on the consent screen.",
+  auth: "Sign-in failed. Add this site's /auth/callback URL in Supabase redirect URLs, then try again.",
+};
+
+function LoginForm() {
+  const searchParams = useSearchParams();
+  const urlError = searchParams.get("error");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    urlError ? OAUTH_ERRORS[urlError] ?? `Sign-in error: ${urlError}` : null
+  );
 
   async function signInWithGoogle() {
     setLoading(true);
@@ -68,5 +81,13 @@ export default function LoginPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm text-muted">Loading...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }
