@@ -1,4 +1,4 @@
-export async function readJsonResponse<T extends Record<string, unknown>>(
+export async function readJsonResponse<T extends object>(
   res: Response
 ): Promise<T> {
   const text = await res.text();
