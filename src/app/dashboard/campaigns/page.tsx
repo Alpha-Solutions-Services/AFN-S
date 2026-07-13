@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import type { Campaign } from "@/lib/types";
@@ -14,6 +15,7 @@ const STATUS_COLORS: Record<Campaign["status"], string> = {
 };
 
 export default function CampaignsPage() {
+  const router = useRouter();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -59,6 +61,11 @@ export default function CampaignsPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to create campaign");
+
+      if (data.campaign?.id) {
+        router.push(`/dashboard/campaigns/${data.campaign.id}`);
+        return;
+      }
 
       setName("");
       setOfferDescription("");
@@ -136,7 +143,9 @@ export default function CampaignsPage() {
           {loading ? (
             <p className="p-4 text-sm text-muted">Loading...</p>
           ) : campaigns.length === 0 ? (
-            <p className="p-4 text-sm text-muted">No campaigns yet.</p>
+            <p className="p-4 text-sm text-muted">
+              No campaigns yet. Create one to generate and send outreach.
+            </p>
           ) : (
             <ul>
               {campaigns.map((campaign) => (

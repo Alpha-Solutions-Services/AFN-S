@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
+import { isCompanyStage } from "@/lib/stages";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
@@ -15,12 +16,26 @@ export async function GET(request: Request) {
     MAX_LIMIT,
     Math.max(1, Number(searchParams.get("limit") ?? DEFAULT_LIMIT))
   );
+  const q = searchParams.get("q")?.trim() ?? "";
+  const stage = searchParams.get("stage")?.trim() ?? "";
 
-  const { data, error, count } = await supabase
+  let query = supabase
     .from("companies")
     .select("*", { count: "exact" })
-    .order("name", { ascending: true })
-    .range(offset, offset + limit - 1);
+    .order("name", { ascending: true });
+
+  if (stage && isCompanyStage(stage)) {
+    query = query.eq("stage", stage);
+  }
+
+  if (q) {
+    const escaped = q.replace(/%/g, "\\%").replace(/_/g, "\\_");
+    query = query.or(
+      `name.ilike.%${escaped}%,email.ilike.%${escaped}%,contact_name.ilike.%${escaped}%,industry.ilike.%${escaped}%`
+    );
+  }
+
+  const { data, error, count } = await query.range(offset, offset + limit - 1);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

@@ -7,13 +7,20 @@ import { getServiceRoleClient } from "@/lib/supabase/service-role";
 const SEND_DELAY_MS = 4000;
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: { id: string } }
 ) {
   const auth = await requireUser();
   if ("error" in auth) return auth.error;
   const { supabase, user } = auth;
   const { id: campaignId } = params;
+
+  let body: { targetIds?: string[]; limit?: number } = {};
+  try {
+    body = await request.json().catch(() => ({}));
+  } catch {
+    body = {};
+  }
 
   const admin = getServiceRoleClient();
   if (!admin) {
@@ -40,7 +47,7 @@ export async function POST(
 
   await supabase.from("campaigns").update({ status: "sending" }).eq("id", campaignId);
 
-  const { data: targets, error: targetsError } = await supabase
+  let query = supabase
     .from("campaign_targets")
     .select(
       `
@@ -53,16 +60,27 @@ export async function POST(
     `
     )
     .eq("campaign_id", campaignId)
-    .eq("status", "pending")
+    .in("status", ["pending", "failed"])
     .not("generated_subject", "is", null)
     .not("generated_body", "is", null);
+
+  if (body.targetIds && body.targetIds.length > 0) {
+    query = query.in("id", body.targetIds);
+  }
+
+  const { data: targetsRaw, error: targetsError } = await query;
 
   if (targetsError) {
     await supabase.from("campaigns").update({ status: "paused" }).eq("id", campaignId);
     return NextResponse.json({ error: targetsError.message }, { status: 500 });
   }
 
-  if (!targets || targets.length === 0) {
+  let targets = targetsRaw ?? [];
+  if (typeof body.limit === "number" && body.limit > 0) {
+    targets = targets.slice(0, body.limit);
+  }
+
+  if (targets.length === 0) {
     await supabase.from("campaigns").update({ status: "completed" }).eq("id", campaignId);
     return NextResponse.json({ sent: 0, failed: 0 });
   }

@@ -6,9 +6,11 @@ import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
 const NAV = [
+  { href: "/dashboard", label: "Overview", exact: true },
   { href: "/dashboard/companies", label: "Companies" },
   { href: "/dashboard/campaigns", label: "Campaigns" },
   { href: "/dashboard/leads", label: "Pipeline" },
+  { href: "/dashboard/settings", label: "Settings" },
 ];
 
 export function DashboardShell({
@@ -38,20 +40,25 @@ export function DashboardShell({
           <p className="mt-1 text-sm font-medium text-text">Sales CRM</p>
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-3">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "rounded-lg px-3 py-2 text-sm transition-colors",
-                pathname === item.href || pathname.startsWith(item.href + "/")
-                  ? "bg-bg font-medium text-accent"
-                  : "text-muted hover:bg-bg hover:text-text"
-              )}
-            >
-              {item.label}
-            </Link>
-          ))}
+          {NAV.map((item) => {
+            const active = item.exact
+              ? pathname === item.href
+              : pathname === item.href || pathname.startsWith(item.href + "/");
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "rounded-lg px-3 py-2 text-sm transition-colors",
+                  active
+                    ? "bg-bg font-medium text-accent"
+                    : "text-muted hover:bg-bg hover:text-text"
+                )}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
         <div className="border-t border-border p-3">
           <button

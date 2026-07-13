@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { readJsonResponse } from "@/lib/fetch-json";
-import type { Campaign, CampaignTarget } from "@/lib/types";
+import type { Campaign, CampaignTarget, TargetStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const TARGET_STATUS_COLORS: Record<CampaignTarget["status"], string> = {
@@ -14,11 +14,22 @@ const TARGET_STATUS_COLORS: Record<CampaignTarget["status"], string> = {
   skipped: "text-warning border-warning/40",
 };
 
-const GENERATE_PAUSE_MS = 1500;
+const GENERATE_PAUSE_MS = 2500;
+const RATE_LIMIT_WAIT_MS = 65_000;
+const RATE_LIMIT_RETRIES = 3;
+
+type StatusFilter = "all" | "ready" | "needs_draft" | TargetStatus;
 
 function needsDraft(target: CampaignTarget) {
   return (
     !target.generated_subject &&
+    (target.status === "pending" || target.status === "failed")
+  );
+}
+
+function isSendable(target: CampaignTarget) {
+  return (
+    Boolean(target.generated_subject && target.generated_body) &&
     (target.status === "pending" || target.status === "failed")
   );
 }
@@ -38,6 +49,13 @@ export default function CampaignDetailPage({
   } | null>(null);
   const [sending, setSending] = useState(false);
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editSubject, setEditSubject] = useState("");
+  const [editBody, setEditBody] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [sendLimit, setSendLimit] = useState<number | "">("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,10 +83,58 @@ export default function CampaignDetailPage({
     void loadCampaign();
   }, [loadCampaign]);
 
-  const readyDrafts = targets.filter(
-    (t) => t.generated_subject && t.generated_body
-  ).length;
-  const canSend = readyDrafts > 0 && !sending && campaign?.status !== "sending";
+  const counts = useMemo(() => {
+    const ready = targets.filter(isSendable).length;
+    const withDraft = targets.filter(
+      (t) => t.generated_subject && t.generated_body
+    ).length;
+    const needs = targets.filter(needsDraft).length;
+    const sent = targets.filter((t) => t.status === "sent").length;
+    const failed = targets.filter((t) => t.status === "failed").length;
+    return { ready, withDraft, needs, sent, failed, total: targets.length };
+  }, [targets]);
+
+  const filteredTargets = useMemo(() => {
+    return targets.filter((t) => {
+      switch (statusFilter) {
+        case "all":
+          return true;
+        case "ready":
+          return isSendable(t);
+        case "needs_draft":
+          return needsDraft(t);
+        default:
+          return t.status === statusFilter;
+      }
+    });
+  }, [targets, statusFilter]);
+
+  const selectedSendable = useMemo(
+    () => filteredTargets.filter((t) => selected.has(t.id) && isSendable(t)),
+    [filteredTargets, selected]
+  );
+
+  const canSend =
+    counts.ready > 0 && !sending && !generating && campaign?.status !== "sending";
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectVisibleReady() {
+    setSelected(
+      new Set(filteredTargets.filter(isSendable).map((t) => t.id))
+    );
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
 
   async function generateOneTarget(targetId: string) {
     const res = await fetch(`/api/campaigns/${params.id}/generate`, {
@@ -129,15 +195,32 @@ export default function CampaignDetailPage({
 
     try {
       for (let i = 0; i < queue.length; i++) {
-        try {
-          await generateOneTarget(queue[i].id);
-          generated++;
-        } catch (err) {
-          failed++;
-          const msg = err instanceof Error ? err.message : "Generation failed";
-          if (/rate limit/i.test(msg)) {
-            setError(`${msg} Stopped after ${generated} drafts.`);
-            break;
+        let attempts = 0;
+        let done = false;
+
+        while (!done) {
+          try {
+            await generateOneTarget(queue[i].id);
+            generated++;
+            done = true;
+            setError(null);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "Generation failed";
+            if (/rate limit/i.test(msg) && attempts < RATE_LIMIT_RETRIES) {
+              attempts++;
+              setError(
+                `AI rate limit — waiting 65s then continuing (${generated.toLocaleString()} drafts so far)…`
+              );
+              await new Promise((r) => setTimeout(r, RATE_LIMIT_WAIT_MS));
+              continue;
+            }
+            failed++;
+            done = true;
+            if (/rate limit/i.test(msg)) {
+              setError(
+                `${msg} Skipping one target; continuing (${generated.toLocaleString()} done).`
+              );
+            }
           }
         }
 
@@ -165,6 +248,7 @@ export default function CampaignDetailPage({
     setError(null);
     try {
       await generateOneTarget(targetId);
+      setMessage("Draft regenerated");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Regeneration failed");
     } finally {
@@ -172,13 +256,73 @@ export default function CampaignDetailPage({
     }
   }
 
-  async function handleSend() {
+  function startEdit(target: CampaignTarget) {
+    setEditingId(target.id);
+    setEditSubject(target.generated_subject ?? "");
+    setEditBody(target.generated_body ?? "");
+  }
+
+  async function saveDraft(targetId: string) {
+    setSavingId(targetId);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/campaigns/${params.id}/targets/${targetId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subject: editSubject, body: editBody }),
+        }
+      );
+      const data = await readJsonResponse<{
+        target?: CampaignTarget;
+        error?: string;
+      }>(res);
+      if (!res.ok) throw new Error(data.error || "Failed to save draft");
+      if (data.target) {
+        setTargets((prev) =>
+          prev.map((t) =>
+            t.id === targetId
+              ? {
+                  ...t,
+                  generated_subject: data.target!.generated_subject,
+                  generated_body: data.target!.generated_body,
+                  status: data.target!.status,
+                  error_message: null,
+                }
+              : t
+          )
+        );
+      }
+      setEditingId(null);
+      setMessage("Draft saved");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function handleSend(opts?: { selectedOnly?: boolean }) {
     setSending(true);
     setMessage(null);
     setError(null);
     try {
+      const payload: { targetIds?: string[]; limit?: number } = {};
+      if (opts?.selectedOnly) {
+        if (selectedSendable.length === 0) {
+          throw new Error("Select at least one ready draft to send");
+        }
+        payload.targetIds = selectedSendable.map((t) => t.id);
+      }
+      if (typeof sendLimit === "number" && sendLimit > 0) {
+        payload.limit = sendLimit;
+      }
+
       const res = await fetch(`/api/campaigns/${params.id}/send`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
       const data = await readJsonResponse<{
         sent?: number;
@@ -187,6 +331,7 @@ export default function CampaignDetailPage({
       }>(res);
       if (!res.ok) throw new Error(data.error || "Send failed");
       setMessage(`Sent ${data.sent} emails (${data.failed} failed)`);
+      setSelected(new Set());
       await loadCampaign();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Send failed");
@@ -214,6 +359,15 @@ export default function CampaignDetailPage({
     );
   }
 
+  const filters: { id: StatusFilter; label: string; count: number }[] = [
+    { id: "all", label: "All", count: counts.total },
+    { id: "ready", label: "Ready", count: counts.ready },
+    { id: "needs_draft", label: "Needs draft", count: counts.needs },
+    { id: "pending", label: "Pending", count: targets.filter((t) => t.status === "pending").length },
+    { id: "sent", label: "Sent", count: counts.sent },
+    { id: "failed", label: "Failed", count: counts.failed },
+  ];
+
   return (
     <DashboardShell title={campaign.name}>
       <div className="mb-4">
@@ -230,7 +384,8 @@ export default function CampaignDetailPage({
         <p className="mt-2 whitespace-pre-wrap text-sm text-text">
           {campaign.offer_description}
         </p>
-        <div className="mt-4 flex flex-wrap gap-3">
+
+        <div className="mt-4 flex flex-wrap items-end gap-3">
           <button
             type="button"
             className="btn-secondary"
@@ -245,20 +400,37 @@ export default function CampaignDetailPage({
             disabled={!canSend}
             onClick={() => void handleSend()}
           >
-            {sending ? "Sending..." : "Send campaign"}
+            {sending ? "Sending..." : "Send all ready"}
           </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={!canSend || selectedSendable.length === 0}
+            onClick={() => void handleSend({ selectedOnly: true })}
+          >
+            Send selected ({selectedSendable.length})
+          </button>
+          <div>
+            <label className="data-label mb-1 block">Max to send</label>
+            <input
+              className="input w-28"
+              type="number"
+              min={1}
+              placeholder="All"
+              value={sendLimit}
+              onChange={(e) =>
+                setSendLimit(e.target.value ? Number(e.target.value) : "")
+              }
+            />
+          </div>
         </div>
-        {!canSend && readyDrafts === 0 ? (
-          <p className="mt-3 text-xs text-muted">
-            Generate at least one draft before sending.
-          </p>
-        ) : null}
-        {readyDrafts > 0 ? (
-          <p className="mt-3 font-mono text-xs text-muted">
-            {readyDrafts.toLocaleString()} of {targets.length.toLocaleString()}{" "}
-            drafts ready
-          </p>
-        ) : null}
+
+        <p className="mt-3 font-mono text-xs text-muted">
+          {counts.withDraft.toLocaleString()} of {counts.total.toLocaleString()}{" "}
+          drafts · {counts.ready.toLocaleString()} ready to send ·{" "}
+          {counts.sent.toLocaleString()} sent · {counts.failed.toLocaleString()}{" "}
+          failed
+        </p>
       </div>
 
       {generateProgress ? (
@@ -289,67 +461,161 @@ export default function CampaignDetailPage({
         </p>
       ) : null}
 
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {filters.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            className={cn(
+              "rounded-lg border px-3 py-1.5 font-mono text-xs transition-colors",
+              statusFilter === f.id
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border text-muted hover:text-text"
+            )}
+            onClick={() => setStatusFilter(f.id)}
+          >
+            {f.label} ({f.count})
+          </button>
+        ))}
+        <button
+          type="button"
+          className="btn-secondary ml-auto text-xs"
+          onClick={selectVisibleReady}
+        >
+          Select visible ready
+        </button>
+        <button
+          type="button"
+          className="btn-secondary text-xs"
+          onClick={clearSelection}
+        >
+          Clear
+        </button>
+      </div>
+
       <div className="space-y-4">
-        {targets.length === 0 ? (
-          <p className="text-sm text-muted">No targets in this campaign.</p>
+        {filteredTargets.length === 0 ? (
+          <p className="text-sm text-muted">No targets match this filter.</p>
         ) : (
-          targets.map((target) => (
-            <div key={target.id} className="panel p-5">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="font-medium text-text">
-                    {target.companies?.name || "Unknown"}
-                  </p>
-                  <p className="mt-0.5 font-mono text-xs text-muted">
-                    {target.companies?.email}
-                  </p>
+          filteredTargets.map((target) => {
+            const sendable = isSendable(target);
+            const editing = editingId === target.id;
+            return (
+              <div key={target.id} className="panel p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={selected.has(target.id)}
+                      disabled={!sendable}
+                      onChange={() => toggleSelect(target.id)}
+                      title={sendable ? "Select for send" : "Not ready to send"}
+                    />
+                    <div>
+                      <p className="font-medium text-text">
+                        {target.companies?.name || "Unknown"}
+                      </p>
+                      <p className="mt-0.5 font-mono text-xs text-muted">
+                        {target.companies?.email}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={cn(
+                        "rounded border px-2 py-0.5 font-mono text-xs uppercase",
+                        TARGET_STATUS_COLORS[target.status]
+                      )}
+                    >
+                      {target.status}
+                    </span>
+                    {target.generated_subject && target.status !== "sent" ? (
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs"
+                        disabled={sending || generating || editing}
+                        onClick={() => startEdit(target)}
+                      >
+                        Edit
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs"
+                      disabled={
+                        regeneratingId === target.id || sending || generating
+                      }
+                      onClick={() => void handleRegenerate(target.id)}
+                    >
+                      {regeneratingId === target.id ? "..." : "Regenerate"}
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      "rounded border px-2 py-0.5 font-mono text-xs uppercase",
-                      TARGET_STATUS_COLORS[target.status]
-                    )}
-                  >
-                    {target.status}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn-secondary text-xs"
-                    disabled={regeneratingId === target.id || sending || generating}
-                    onClick={() => void handleRegenerate(target.id)}
-                  >
-                    {regeneratingId === target.id ? "..." : "Regenerate"}
-                  </button>
-                </div>
+
+                {editing ? (
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label className="data-label mb-1 block">Subject</label>
+                      <input
+                        className="input"
+                        value={editSubject}
+                        onChange={(e) => setEditSubject(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="data-label mb-1 block">Body</label>
+                      <textarea
+                        className="input min-h-[140px] resize-y"
+                        value={editBody}
+                        onChange={(e) => setEditBody(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary text-xs"
+                        disabled={savingId === target.id}
+                        onClick={() => void saveDraft(target.id)}
+                      >
+                        {savingId === target.id ? "Saving..." : "Save draft"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs"
+                        onClick={() => setEditingId(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : target.generated_subject ? (
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <p className="data-label">Subject</p>
+                      <p className="mt-1 text-sm text-text">
+                        {target.generated_subject}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="data-label">Body</p>
+                      <p className="mt-1 whitespace-pre-wrap text-sm text-muted">
+                        {target.generated_body}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-xs text-muted">No draft yet.</p>
+                )}
+
+                {target.error_message ? (
+                  <p className="mt-3 font-mono text-xs text-danger">
+                    {target.error_message}
+                  </p>
+                ) : null}
               </div>
-
-              {target.generated_subject ? (
-                <div className="mt-4 space-y-3">
-                  <div>
-                    <p className="data-label">Subject</p>
-                    <p className="mt-1 font-mono text-sm text-text">
-                      {target.generated_subject}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="data-label">Body</p>
-                    <p className="mt-1 whitespace-pre-wrap font-mono text-sm text-muted">
-                      {target.generated_body}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-4 text-xs text-muted">No draft yet.</p>
-              )}
-
-              {target.error_message ? (
-                <p className="mt-3 font-mono text-xs text-danger">
-                  {target.error_message}
-                </p>
-              ) : null}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </DashboardShell>
