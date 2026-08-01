@@ -375,6 +375,30 @@ export default function CampaignDetailPage({
     }
   }
 
+  async function handleMarkReplied(targetId: string) {
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/campaigns/${params.id}/targets/${targetId}/reply`,
+        { method: "POST" }
+      );
+      const data = await readJsonResponse<{
+        target?: CampaignTarget;
+        error?: string;
+      }>(res);
+      if (!res.ok) throw new Error(data.error || "Failed to mark replied");
+      if (data.target) {
+        setTargets((prev) =>
+          prev.map((t) => (t.id === targetId ? { ...t, ...data.target } : t))
+        );
+        setStats((s) => ({ ...s, replied: (s.replied ?? 0) + 1 }));
+      }
+      setMessage("Marked as replied.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Mark replied failed");
+    }
+  }
+
   async function handleDeleteCampaign() {
     if (
       !window.confirm(
