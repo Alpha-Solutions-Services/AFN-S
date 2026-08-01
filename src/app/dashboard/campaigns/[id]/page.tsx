@@ -452,8 +452,8 @@ export default function CampaignDetailPage({
         </div>
       ) : health?.gmail ? (
         <p className="mb-4 font-mono text-xs text-muted">
-          Sending as Muhammad Mikran via sales.afn.alpha@gmail.com · replies go
-          to mikran.dispatch@gmail.com
+          Sending as Muhammad Mikran via sales.afn.alpha@gmail.com · CC
+          kevin.afn.dispatch@gmail.com · replies to mikran.dispatch@gmail.com
         </p>
       ) : null}
 
