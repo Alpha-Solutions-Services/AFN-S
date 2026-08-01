@@ -51,6 +51,7 @@ export async function sendSalesEmail(opts: {
   to: string;
   subject: string;
   body: string;
+  openTrackingUrl?: string;
 }): Promise<{ messageId: string }> {
   const to = opts.to.trim().toLowerCase();
   if (!to || isSyntheticEmail(to)) {
@@ -65,7 +66,9 @@ export async function sendSalesEmail(opts: {
   const replyTo = getSalesReplyTo();
   const cc = getSalesCc();
   const text = ensureSalesSignature(opts.body);
-  const html = buildSalesEmailHtml(text);
+  const html = buildSalesEmailHtml(text, {
+    openTrackingUrl: opts.openTrackingUrl,
+  });
 
   const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",

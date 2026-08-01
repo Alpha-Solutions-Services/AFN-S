@@ -155,9 +155,9 @@ export default function CallQueuePage() {
     <DashboardShell title="Call Queue">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted">
-          Free dialer — tap Call to open your phone / Google Voice (
-          <span className="font-mono text-xs">tel:</span> link). Log the outcome
-          after each dial.
+          Free dialer — use <span className="font-mono text-xs">Call</span> for
+          your phone, or <span className="font-mono text-xs">Open in Google
+          Voice</span> if Voice is on another Google account / Chrome profile.
         </p>
         <button
           type="button"
@@ -276,17 +276,32 @@ export default function CallQueuePage() {
 
             <div className="mt-8">
               {phone ? (
-                <a
-                  href={phone.telHref}
-                  className="btn-primary inline-flex min-h-[52px] min-w-[160px] text-base"
-                >
-                  Call {phone.display}
-                </a>
+                <div className="mt-8 flex flex-wrap gap-3">
+                  <a
+                    href={phone.telHref}
+                    className="btn-primary inline-flex min-h-[52px] min-w-[140px] text-base"
+                  >
+                    Call {phone.display}
+                  </a>
+                  <a
+                    href={`https://voice.google.com/u/${process.env.NEXT_PUBLIC_GOOGLE_VOICE_ACCOUNT || "0"}/calls?a=nc,${encodeURIComponent(phone.e164)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-secondary inline-flex min-h-[52px] text-base"
+                  >
+                    Open in Google Voice
+                  </a>
+                </div>
               ) : (
-                <p className="font-mono text-xs text-danger">
+                <p className="mt-8 font-mono text-xs text-danger">
                   Phone number could not be normalized for dialing.
                 </p>
               )}
+              <p className="mt-3 text-xs text-muted">
+                Tip: keep Google Voice logged in on a second Chrome profile/window.
+                Set NEXT_PUBLIC_GOOGLE_VOICE_ACCOUNT to 0, 1, or 2 to match
+                voice.google.com/u/N/…
+              </p>
             </div>
 
             <div className="mt-6">

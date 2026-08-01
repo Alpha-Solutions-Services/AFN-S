@@ -63,6 +63,11 @@ export interface CampaignTarget {
   status: TargetStatus;
   error_message: string | null;
   sent_at: string | null;
+  tracking_token?: string | null;
+  opened_at?: string | null;
+  open_count?: number;
+  replied_at?: string | null;
+  last_event_at?: string | null;
   created_at: string;
   updated_at: string;
   companies?: Pick<

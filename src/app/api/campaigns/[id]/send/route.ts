@@ -4,6 +4,7 @@ import { ensureSalesSignature } from "@/lib/email-signature";
 import { isSalesMailConfigured, sendSalesEmail } from "@/lib/mail";
 import { isSyntheticEmail } from "@/lib/phone";
 import { getServiceRoleClient } from "@/lib/supabase/service-role";
+import { buildOpenTrackingUrl } from "@/lib/tracking";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -65,6 +66,7 @@ export async function POST(
       generated_subject,
       generated_body,
       status,
+      tracking_token,
       companies ( email )
     `
     )
@@ -109,12 +111,23 @@ export async function POST(
     );
   }
 
+  // Ensure open-tracking token exists (migration backfill + new rows)
+  let trackingToken = (target as { tracking_token?: string | null }).tracking_token;
+  if (!trackingToken) {
+    trackingToken = crypto.randomUUID();
+    await supabase
+      .from("campaign_targets")
+      .update({ tracking_token: trackingToken })
+      .eq("id", target.id);
+  }
+
   try {
     const bodyWithSignature = ensureSalesSignature(target.generated_body);
     const { messageId } = await sendSalesEmail({
       to: recipientEmail,
       subject: target.generated_subject,
       body: bodyWithSignature,
+      openTrackingUrl: buildOpenTrackingUrl(trackingToken),
     });
 
     await supabase
@@ -123,6 +136,7 @@ export async function POST(
         status: "sent",
         sent_at: new Date().toISOString(),
         error_message: null,
+        tracking_token: trackingToken,
       })
       .eq("id", target.id);
 

@@ -61,7 +61,7 @@ export async function GET(
 
   const { data: allTargets } = await supabase
     .from("campaign_targets")
-    .select("status, generated_subject, generated_body")
+    .select("status, generated_subject, generated_body, opened_at, replied_at")
     .eq("campaign_id", id);
 
   const stats = {
@@ -69,6 +69,8 @@ export async function GET(
     pending: allTargets?.filter((t) => t.status === "pending").length ?? 0,
     sent: allTargets?.filter((t) => t.status === "sent").length ?? 0,
     failed: allTargets?.filter((t) => t.status === "failed").length ?? 0,
+    opened: allTargets?.filter((t) => Boolean(t.opened_at)).length ?? 0,
+    replied: allTargets?.filter((t) => Boolean(t.replied_at)).length ?? 0,
     withDraft:
       allTargets?.filter((t) => t.generated_subject && t.generated_body).length ??
       0,

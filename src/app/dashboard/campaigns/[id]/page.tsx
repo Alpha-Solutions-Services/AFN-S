@@ -51,6 +51,8 @@ export default function CampaignDetailPage({
     failed: 0,
     withDraft: 0,
     readyToSend: 0,
+    opened: 0,
+    replied: 0,
   });
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -468,12 +470,13 @@ export default function CampaignDetailPage({
           {campaign.offer_description}
         </p>
 
-        <div className="mt-4 grid gap-2 font-mono text-xs text-muted sm:grid-cols-5">
+        <div className="mt-4 grid gap-2 font-mono text-xs text-muted sm:grid-cols-3 lg:grid-cols-6">
           <span>{stats.total.toLocaleString()} targets</span>
           <span>{stats.withDraft.toLocaleString()} drafts</span>
-          <span>{readyToSend.toLocaleString()} ready to send</span>
+          <span>{readyToSend.toLocaleString()} ready</span>
           <span>{stats.sent.toLocaleString()} sent</span>
-          <span>{stats.failed.toLocaleString()} failed</span>
+          <span>{(stats.opened ?? 0).toLocaleString()} opened</span>
+          <span>{(stats.replied ?? 0).toLocaleString()} replied</span>
         </div>
 
         <div className="mt-5 flex flex-wrap items-end gap-3">
@@ -604,6 +607,16 @@ export default function CampaignDetailPage({
                   >
                     {target.status}
                   </span>
+                  {target.opened_at ? (
+                    <span className="rounded border border-accent/40 px-2 py-0.5 font-mono text-xs uppercase text-accent">
+                      opened{target.open_count && target.open_count > 1 ? ` ×${target.open_count}` : ""}
+                    </span>
+                  ) : null}
+                  {target.replied_at ? (
+                    <span className="rounded border border-success/40 px-2 py-0.5 font-mono text-xs uppercase text-success">
+                      replied
+                    </span>
+                  ) : null}
                   {canSendTarget(target) ? (
                     <button
                       type="button"
@@ -612,6 +625,16 @@ export default function CampaignDetailPage({
                       onClick={() => void handleSendOne(target.id)}
                     >
                       {sendingId === target.id ? "Sending..." : "Send"}
+                    </button>
+                  ) : null}
+                  {target.status === "sent" && !target.replied_at ? (
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs"
+                      disabled={isRunning}
+                      onClick={() => void handleMarkReplied(target.id)}
+                    >
+                      Mark replied
                     </button>
                   ) : null}
                   <button

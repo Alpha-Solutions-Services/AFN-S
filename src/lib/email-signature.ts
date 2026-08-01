@@ -121,7 +121,10 @@ export function bodyWithoutSignature(body: string): string {
   return cut.trimEnd();
 }
 
-export function buildSalesEmailHtml(plainBodyWithSignature: string): string {
+export function buildSalesEmailHtml(
+  plainBodyWithSignature: string,
+  opts?: { openTrackingUrl?: string }
+): string {
   const opener = bodyWithoutSignature(plainBodyWithSignature);
   const openerHtml = opener
     .split(/\n{2,}/)
@@ -132,6 +135,10 @@ export function buildSalesEmailHtml(plainBodyWithSignature: string): string {
         `<p style="margin:0 0 14px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;color:#202124;">${escapeHtml(p).replace(/\n/g, "<br>")}</p>`
     )
     .join("");
+
+  const trackingPixel = opts?.openTrackingUrl
+    ? `<img src="${escapeHtml(opts.openTrackingUrl)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;" />`
+    : "";
 
   return `<!DOCTYPE html>
 <html>
@@ -193,6 +200,7 @@ export function buildSalesEmailHtml(plainBodyWithSignature: string): string {
           <a href="${SALES_FREIGHT_URL}" style="color:#1a73e8;text-decoration:none;">alphasolutions.software/freight</a>
         </div>
       </div>
+      ${trackingPixel}
     </div>
   </div>
 </body>
