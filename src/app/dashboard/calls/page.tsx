@@ -368,6 +368,10 @@ export default function CallQueuePage() {
                 {DISPATCH_TALK_TRACK.ask}
               </li>
               <li>
+                <span className="font-medium text-text">Google Voice: </span>
+                {DISPATCH_TALK_TRACK.googleVoice} (call / text — primary)
+              </li>
+              <li>
                 <span className="font-medium text-text">Close: </span>
                 {DISPATCH_TALK_TRACK.close}
               </li>
