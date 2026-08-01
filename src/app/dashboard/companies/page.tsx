@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { StageBadge } from "@/components/StageBadge";
@@ -31,6 +32,7 @@ export default function CompaniesPage() {
   } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastImportCount, setLastImportCount] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const loadCompanies = useCallback(
@@ -165,6 +167,7 @@ export default function CompaniesPage() {
             : "") +
           ` across ${batches.toLocaleString()} batches`
       );
+      setLastImportCount(imported);
       await loadCompanies(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Import failed");
@@ -253,9 +256,16 @@ export default function CompaniesPage() {
       ) : null}
 
       {message ? (
-        <p className="mb-4 rounded-lg border border-success/40 bg-success/10 px-3 py-2 font-mono text-xs text-success">
-          {message}
-        </p>
+        <div className="mb-4 space-y-3">
+          <p className="rounded-lg border border-success/40 bg-success/10 px-3 py-2 font-mono text-xs text-success">
+            {message}
+          </p>
+          {lastImportCount && lastImportCount > 0 ? (
+            <Link href="/dashboard/campaigns" className="btn-primary inline-flex">
+              Start sales campaign with {lastImportCount.toLocaleString()} companies
+            </Link>
+          ) : null}
+        </div>
       ) : null}
       {error ? (
         <p className="mb-4 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">

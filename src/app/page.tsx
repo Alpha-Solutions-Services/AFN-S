@@ -7,7 +7,7 @@ import { getSiteUrl } from "@/lib/site-url";
 
 const OAUTH_ERRORS: Record<string, string> = {
   access_denied:
-    "Google blocked sign-in. Add your Gmail as a test user in Google Cloud Console (OAuth consent screen → Test users).",
+    "Google blocked sign-in. Add your account as a test user in Google Cloud Console (OAuth consent screen → Test users).",
   bad_oauth_state:
     "Sign-in session expired. Keep `npm run dev` running, then click Continue with Google again without waiting on the consent screen.",
   auth: "Sign-in failed. Add this site's /auth/callback URL in Supabase redirect URLs, then try again.",
@@ -35,15 +35,11 @@ function LoginForm() {
     const siteUrl =
       typeof window !== "undefined" ? window.location.origin : getSiteUrl();
 
+    // Auth only — outbound mail uses shared sales.afn.alpha@gmail.com (SMTP), not gmail.send OAuth
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
         redirectTo: `${siteUrl}/auth/callback`,
-        scopes: "https://www.googleapis.com/auth/gmail.send",
-        queryParams: {
-          access_type: "offline",
-          prompt: "consent",
-        },
       },
     });
 
@@ -61,8 +57,11 @@ function LoginForm() {
         </p>
         <h1 className="mt-2 text-2xl font-semibold text-text">Sales CRM</h1>
         <p className="mt-3 text-sm text-muted">
-          Sign in with the Google account you want cold emails to send from.
-          Gmail send permission is required.
+          Sign in to manage carrier outreach. Campaigns send from{" "}
+          <span className="font-mono text-xs text-text">
+            sales.afn.alpha@gmail.com
+          </span>
+          .
         </p>
 
         {error ? (

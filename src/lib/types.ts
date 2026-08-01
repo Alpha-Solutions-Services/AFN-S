@@ -1,5 +1,7 @@
 export type CompanyStage =
   | "not_contacted"
+  | "attempted"
+  | "callback"
   | "emailed"
   | "opened"
   | "replied"
@@ -11,11 +13,21 @@ export type CampaignStatus = "draft" | "sending" | "completed" | "paused";
 
 export type TargetStatus = "pending" | "sent" | "failed" | "skipped";
 
+export type CallOutcome =
+  | "no_answer"
+  | "voicemail"
+  | "not_interested"
+  | "callback"
+  | "interested"
+  | "wrong_number"
+  | "do_not_call"
+  | "won";
+
 export interface Company {
   id: string;
   owner_id: string;
   name: string;
-  email: string;
+  email: string | null;
   industry: string | null;
   contact_name: string | null;
   contact_title: string | null;
@@ -24,6 +36,9 @@ export interface Company {
   notes: string | null;
   extra: Record<string, unknown>;
   stage: CompanyStage;
+  last_called_at: string | null;
+  next_call_at: string | null;
+  call_attempts: number;
   created_at: string;
   updated_at: string;
 }
@@ -81,3 +96,37 @@ export interface EmailDraft {
   subject: string;
   body: string;
 }
+
+export interface CallLog {
+  id: string;
+  owner_id: string;
+  company_id: string;
+  outcome: CallOutcome;
+  notes: string | null;
+  duration_seconds: number | null;
+  called_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const CALL_OUTCOMES: CallOutcome[] = [
+  "no_answer",
+  "voicemail",
+  "callback",
+  "interested",
+  "not_interested",
+  "wrong_number",
+  "do_not_call",
+  "won",
+];
+
+export const CALL_OUTCOME_LABELS: Record<CallOutcome, string> = {
+  no_answer: "No answer",
+  voicemail: "Voicemail",
+  not_interested: "Not interested",
+  callback: "Callback",
+  interested: "Interested",
+  wrong_number: "Wrong number",
+  do_not_call: "Do not call",
+  won: "Won",
+};

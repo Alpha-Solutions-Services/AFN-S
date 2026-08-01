@@ -1,6 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { storeGoogleTokens } from "@/lib/google-tokens";
 import { isAllowedSiteOrigin } from "@/lib/site-url";
 
 export async function GET(request: NextRequest) {
@@ -24,7 +23,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}/?error=auth`);
   }
 
-  let response = NextResponse.redirect(`${origin}/dashboard/companies`);
+  let response = NextResponse.redirect(`${origin}/dashboard/calls`);
 
   const supabase = createServerClient(url, anon, {
     cookies: {
@@ -40,27 +39,11 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  const { data: sessionData, error } = await supabase.auth.exchangeCodeForSession(code);
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
   if (error) {
     console.error("exchangeCodeForSession:", error.message);
     const key = error.message.includes("state") ? "bad_oauth_state" : "auth";
     return NextResponse.redirect(`${origin}/?error=${encodeURIComponent(key)}`);
-  }
-
-  const session = sessionData.session;
-  const user = session?.user;
-
-  if (user && session?.provider_refresh_token) {
-    const result = await storeGoogleTokens(
-      user.id,
-      session.provider_refresh_token,
-      user.email ?? ""
-    );
-    if (!result.ok) {
-      console.error("Failed to store Google tokens:", result.error);
-    }
-  } else if (user) {
-    console.warn("No provider_refresh_token in session for user", user.id);
   }
 
   return response;

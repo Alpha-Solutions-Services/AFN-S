@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/dashboard", label: "Overview", exact: true },
+  { href: "/dashboard/calls", label: "Call Queue" },
   { href: "/dashboard/companies", label: "Companies" },
   { href: "/dashboard/campaigns", label: "Campaigns" },
   { href: "/dashboard/leads", label: "Pipeline" },

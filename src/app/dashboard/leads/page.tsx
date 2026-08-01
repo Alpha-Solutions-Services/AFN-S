@@ -159,7 +159,7 @@ export default function LeadsPage() {
                     >
                       <p className="text-sm font-medium text-text">{company.name}</p>
                       <p className="mt-1 font-mono text-xs text-muted">
-                        {company.email}
+                        {company.phone || company.email || "—"}
                       </p>
                       {company.industry ? (
                         <p className="mt-2 text-xs text-muted">{company.industry}</p>

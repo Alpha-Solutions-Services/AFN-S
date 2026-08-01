@@ -8,15 +8,22 @@ export async function PATCH(
 ) {
   const auth = await requireUser();
   if ("error" in auth) return auth.error;
-  const { supabase } = auth;
+  const { supabase, user } = auth;
+
+  const id = params.id;
+  if (!id) {
+    return NextResponse.json({ error: "Missing company id" }, { status: 400 });
+  }
 
   let body: {
     stage?: string;
+    next_call_at?: string | null;
     notes?: string | null;
-    name?: string;
     phone?: string | null;
+    name?: string;
     contact_name?: string | null;
   };
+
   try {
     body = await request.json();
   } catch {
@@ -31,7 +38,21 @@ export async function PATCH(
     }
     updates.stage = body.stage;
   }
-  if (body.notes !== undefined) updates.notes = body.notes;
+
+  if (body.next_call_at !== undefined) {
+    updates.next_call_at = body.next_call_at
+      ? new Date(body.next_call_at).toISOString()
+      : null;
+  }
+
+  if (body.notes !== undefined) {
+    updates.notes = body.notes?.trim() || null;
+  }
+
+  if (body.phone !== undefined) {
+    updates.phone = body.phone?.trim() || null;
+  }
+
   if (body.name !== undefined) {
     const name = body.name.trim();
     if (!name) {
@@ -39,8 +60,10 @@ export async function PATCH(
     }
     updates.name = name;
   }
-  if (body.phone !== undefined) updates.phone = body.phone;
-  if (body.contact_name !== undefined) updates.contact_name = body.contact_name;
+
+  if (body.contact_name !== undefined) {
+    updates.contact_name = body.contact_name?.trim() || null;
+  }
 
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
@@ -49,7 +72,8 @@ export async function PATCH(
   const { data, error } = await supabase
     .from("companies")
     .update(updates)
-    .eq("id", params.id)
+    .eq("id", id)
+    .eq("owner_id", user.id)
     .select("*")
     .single();
 

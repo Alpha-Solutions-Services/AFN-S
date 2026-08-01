@@ -2,6 +2,8 @@ import type { CompanyStage } from "@/lib/types";
 
 export const COMPANY_STAGES: CompanyStage[] = [
   "not_contacted",
+  "attempted",
+  "callback",
   "emailed",
   "opened",
   "replied",
@@ -12,6 +14,8 @@ export const COMPANY_STAGES: CompanyStage[] = [
 
 export const STAGE_LABELS: Record<CompanyStage, string> = {
   not_contacted: "Not contacted",
+  attempted: "Attempted",
+  callback: "Callback",
   emailed: "Emailed",
   opened: "Opened",
   replied: "Replied",

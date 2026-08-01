@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { parseExcelBuffer, type ParsedCompanyRow } from "@/lib/excel-import";
-import { IMPORT_BATCH_SIZE, dedupePayload, type ImportRowPayload } from "@/lib/import-batch";
+import { IMPORT_BATCH_SIZE, dedupePayload, type UpsertCompanyRow } from "@/lib/import-batch";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-function toPayload(rows: ParsedCompanyRow[], ownerId: string): ImportRowPayload[] {
+function toPayload(rows: ParsedCompanyRow[], ownerId: string) {
   return rows.map((row) => ({
     owner_id: ownerId,
     name: row.name,
@@ -18,13 +18,13 @@ function toPayload(rows: ParsedCompanyRow[], ownerId: string): ImportRowPayload[
     phone: row.phone,
     notes: row.notes,
     extra: row.extra,
-    stage: row.stage,
+    // stage omitted — DB default on insert; existing stage preserved on update
   }));
 }
 
 async function upsertBatches(
   supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
-  payload: ImportRowPayload[]
+  payload: ReturnType<typeof toPayload>
 ) {
   if (!supabase) throw new Error("Database not configured");
 
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
 
     if (rows.length === 0) {
       return NextResponse.json(
-        { error: "No valid rows with email addresses found" },
+        { error: "No valid rows found (need email and/or phone)" },
         { status: 400 }
       );
     }

@@ -5,26 +5,10 @@ import {
   isRateLimitError,
   parseRetrySeconds,
 } from "@/lib/ai-email";
-import { sleep } from "@/lib/gmail";
+import { sleep } from "@/lib/mail";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-async function generateWithRetry(
-  company: Parameters<typeof generateEmailDraft>[0]["company"],
-  offerDescription: string
-) {
-  try {
-    return await generateEmailDraft({ company, offerDescription });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Generation failed";
-    if (!isRateLimitError(message)) throw err;
-
-    const waitSec = parseRetrySeconds(message) ?? 30;
-    await sleep(waitSec * 1000);
-    return await generateEmailDraft({ company, offerDescription });
-  }
-}
 
 export async function POST(
   request: Request,
@@ -35,7 +19,7 @@ export async function POST(
   const { supabase } = auth;
   const { id: campaignId } = params;
 
-  let body: { targetId?: string } = {};
+  let body: { targetId?: string; variationIndex?: number } = {};
   try {
     body = await request.json().catch(() => ({}));
   } catch {
@@ -72,7 +56,9 @@ export async function POST(
         contact_name,
         contact_title,
         website,
-        notes
+        notes,
+        phone,
+        extra
       )
     `
     )
@@ -92,8 +78,27 @@ export async function POST(
     return NextResponse.json({ error: "Company not found" }, { status: 404 });
   }
 
+  const variationIndex = body.variationIndex ?? 0;
+
   try {
-    const draft = await generateWithRetry(company, campaign.offer_description);
+    let draft;
+    try {
+      draft = await generateEmailDraft({
+        company,
+        offerDescription: campaign.offer_description,
+        variationIndex,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Generation failed";
+      if (!isRateLimitError(message)) throw err;
+      const waitSec = parseRetrySeconds(message) ?? 30;
+      await sleep(waitSec * 1000);
+      draft = await generateEmailDraft({
+        company,
+        offerDescription: campaign.offer_description,
+        variationIndex,
+      });
+    }
 
     const { error: updateError } = await supabase
       .from("campaign_targets")

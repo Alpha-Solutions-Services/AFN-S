@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { syntheticEmailFromPhone } from "@/lib/phone";
 import type { CompanyStage } from "@/lib/types";
 
 export interface ParsedCompanyRow {
@@ -48,6 +49,9 @@ const FIELD_ALIASES: Record<string, keyof Omit<ParsedCompanyRow, "extra" | "stag
   phone_number: "phone",
   tel: "phone",
   telephone: "phone",
+  cell: "phone",
+  mobile: "phone",
+  business_phone: "phone",
 
   notes: "notes",
   note: "notes",
@@ -57,6 +61,8 @@ const FIELD_ALIASES: Record<string, keyof Omit<ParsedCompanyRow, "extra" | "stag
   mailing_address: "notes",
   dot: "notes",
   mc: "notes",
+  mc_number: "notes",
+  dot_number: "notes",
   mc_dot: "notes",
   mcs_number: "notes",
   power_units: "notes",
@@ -87,6 +93,33 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function extraValue(extra: Record<string, unknown>, ...normKeys: string[]): string | null {
+  for (const [rawKey, rawValue] of Object.entries(extra)) {
+    const norm = normalizeHeader(rawKey);
+    if (normKeys.includes(norm)) return pickString(rawValue);
+  }
+  return null;
+}
+
+function buildNotes(
+  mappedNotes: string | null,
+  extra: Record<string, unknown>
+): string | null {
+  const parts: string[] = [];
+  if (mappedNotes) parts.push(mappedNotes);
+
+  const mcFromAlias = extraValue(extra, "mc", "mc_number", "mcnumber");
+  const dotFromAlias = extraValue(extra, "dot", "dot_number", "dotnumber", "usdot");
+  if (mcFromAlias && !parts.some((p) => /MC/i.test(p) && p.includes(mcFromAlias))) {
+    parts.push(`MC: ${mcFromAlias}`);
+  }
+  if (dotFromAlias && !parts.some((p) => /DOT/i.test(p) && p.includes(dotFromAlias))) {
+    parts.push(`DOT: ${dotFromAlias}`);
+  }
+
+  return parts.length ? parts.join(" · ") : null;
+}
+
 export function parseExcelBuffer(buffer: ArrayBuffer): ParsedCompanyRow[] {
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheetName = workbook.SheetNames[0];
@@ -112,21 +145,44 @@ export function parseExcelBuffer(buffer: ArrayBuffer): ParsedCompanyRow[] {
       if (!value) continue;
 
       if (field) {
-        if (!mapped[field]) mapped[field] = value;
-        else extra[rawKey] = value;
+        if (field === "notes") {
+          mapped.notes = mapped.notes ? `${mapped.notes} · ${value}` : value;
+          // Keep MC/DOT etc also in extra for buildNotes
+          if (
+            ["dot", "mc", "mc_dot", "mcs_number", "mc_number", "dot_number"].includes(
+              norm
+            )
+          ) {
+            extra[rawKey] = value;
+          }
+        } else if (!mapped[field]) {
+          mapped[field] = value;
+        } else {
+          extra[rawKey] = value;
+        }
       } else {
         extra[rawKey] = value;
       }
     }
 
-    const email = (mapped.email || "").trim().toLowerCase();
-    if (!email || !isValidEmail(email)) continue;
+    const phone = mapped.phone ?? null;
+    let email = (mapped.email || "").trim().toLowerCase();
+
+    if (email && !isValidEmail(email)) {
+      email = "";
+    }
+
+    // Phone-only carrier lists (FMCSA): allow rows with phone and no email
+    if (!email) {
+      if (!phone) continue;
+      email = syntheticEmailFromPhone(phone);
+    }
 
     const name =
       mapped.name ||
-      pickString(extra.dba_name) ||
-      pickString(extra.legal_name) ||
-      email.split("@")[0] ||
+      extraValue(extra, "dba_name", "dbaname") ||
+      extraValue(extra, "legal_name", "legalname") ||
+      (email.includes("@noemail.local") ? phone || "Unknown" : email.split("@")[0]) ||
       "Unknown";
 
     results.push({
@@ -136,8 +192,8 @@ export function parseExcelBuffer(buffer: ArrayBuffer): ParsedCompanyRow[] {
       contact_name: mapped.contact_name ?? null,
       contact_title: mapped.contact_title ?? null,
       website: mapped.website ?? null,
-      phone: mapped.phone ?? null,
-      notes: mapped.notes ?? null,
+      phone,
+      notes: buildNotes(mapped.notes ?? null, extra),
       extra,
       stage: "not_contacted",
     });

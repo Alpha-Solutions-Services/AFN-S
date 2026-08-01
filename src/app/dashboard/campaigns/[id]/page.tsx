@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
+import { GENERATION_DELAY_MS } from "@/lib/ai-email";
 import { readJsonResponse } from "@/lib/fetch-json";
+import { sendDelayWithJitter, cn } from "@/lib/utils";
 import type { Campaign, CampaignTarget, TargetStatus } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 const TARGET_STATUS_COLORS: Record<CampaignTarget["status"], string> = {
   pending: "text-muted border-border",
@@ -14,23 +16,23 @@ const TARGET_STATUS_COLORS: Record<CampaignTarget["status"], string> = {
   skipped: "text-warning border-warning/40",
 };
 
-const GENERATE_PAUSE_MS = 2500;
-const RATE_LIMIT_WAIT_MS = 65_000;
-const RATE_LIMIT_RETRIES = 3;
+const PAGE_SIZE = 50;
+const BATCH_SIZES = [10, 25, 50, 100] as const;
 
-type StatusFilter = "all" | "ready" | "needs_draft" | TargetStatus;
+type StatusFilter = "all" | TargetStatus | "ready";
 
 function needsDraft(target: CampaignTarget) {
   return (
-    !target.generated_subject &&
+    (!target.generated_subject || !target.generated_body) &&
     (target.status === "pending" || target.status === "failed")
   );
 }
 
-function isSendable(target: CampaignTarget) {
-  return (
-    Boolean(target.generated_subject && target.generated_body) &&
-    (target.status === "pending" || target.status === "failed")
+function canSendTarget(target: CampaignTarget) {
+  return Boolean(
+    target.generated_subject &&
+      target.generated_body &&
+      (target.status === "pending" || target.status === "failed")
   );
 }
 
@@ -39,114 +41,107 @@ export default function CampaignDetailPage({
 }: {
   params: { id: string };
 }) {
+  const router = useRouter();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [targets, setTargets] = useState<CampaignTarget[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
-  const [generateProgress, setGenerateProgress] = useState<{
-    done: number;
-    total: number;
-  } | null>(null);
-  const [sending, setSending] = useState(false);
-  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editSubject, setEditSubject] = useState("");
-  const [editBody, setEditBody] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [stats, setStats] = useState({
+    total: 0,
+    pending: 0,
+    sent: 0,
+    failed: 0,
+    withDraft: 0,
+    readyToSend: 0,
+  });
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [sendLimit, setSendLimit] = useState<number | "">("");
+  const [loading, setLoading] = useState(true);
+  const [health, setHealth] = useState<{
+    ready: boolean;
+    ai: string;
+    gmail: boolean;
+  } | null>(null);
+  const [automationPhase, setAutomationPhase] = useState<
+    "idle" | "generating" | "sending"
+  >("idle");
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [batchSize, setBatchSize] = useState<number | "all">(25);
+  const [deleting, setDeleting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const readyToSend = stats.readyToSend;
 
   const loadCampaign = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/campaigns/${params.id}`);
+      const statusParam =
+        statusFilter !== "all" && statusFilter !== "ready"
+          ? `&status=${statusFilter}`
+          : "";
+      const res = await fetch(
+        `/api/campaigns/${params.id}?limit=${PAGE_SIZE}&offset=${offset}${statusParam}`
+      );
       const data = await readJsonResponse<{
         campaign?: Campaign;
         targets?: CampaignTarget[];
+        total?: number;
+        stats?: typeof stats;
         error?: string;
       }>(res);
       if (!res.ok) throw new Error(data.error || "Failed to load campaign");
+      let nextTargets = data.targets ?? [];
+      if (statusFilter === "ready") {
+        nextTargets = nextTargets.filter(canSendTarget);
+      }
       setCampaign(data.campaign ?? null);
-      setTargets(data.targets ?? []);
+      setTargets(nextTargets);
+      setTotal(data.total ?? 0);
+      if (data.stats) setStats(data.stats);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load");
     } finally {
       setLoading(false);
     }
-  }, [params.id]);
+  }, [params.id, offset, statusFilter]);
 
   useEffect(() => {
     void loadCampaign();
   }, [loadCampaign]);
 
-  const counts = useMemo(() => {
-    const ready = targets.filter(isSendable).length;
-    const withDraft = targets.filter(
-      (t) => t.generated_subject && t.generated_body
-    ).length;
-    const needs = targets.filter(needsDraft).length;
-    const sent = targets.filter((t) => t.status === "sent").length;
-    const failed = targets.filter((t) => t.status === "failed").length;
-    return { ready, withDraft, needs, sent, failed, total: targets.length };
-  }, [targets]);
-
-  const filteredTargets = useMemo(() => {
-    return targets.filter((t) => {
-      switch (statusFilter) {
-        case "all":
-          return true;
-        case "ready":
-          return isSendable(t);
-        case "needs_draft":
-          return needsDraft(t);
-        default:
-          return t.status === statusFilter;
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/health");
+        const data = await readJsonResponse<{
+          ready?: boolean;
+          ai?: string;
+          gmail?: boolean;
+        }>(res);
+        setHealth({
+          ready: Boolean(data.ready),
+          ai: data.ai ?? "none",
+          gmail: Boolean(data.gmail),
+        });
+      } catch {
+        setHealth({ ready: false, ai: "none", gmail: false });
       }
-    });
-  }, [targets, statusFilter]);
+    })();
+  }, []);
 
-  const selectedSendable = useMemo(
-    () => filteredTargets.filter((t) => selected.has(t.id) && isSendable(t)),
-    [filteredTargets, selected]
-  );
-
-  const canSend =
-    counts.ready > 0 && !sending && !generating && campaign?.status !== "sending";
-
-  function toggleSelect(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function selectVisibleReady() {
-    setSelected(
-      new Set(filteredTargets.filter(isSendable).map((t) => t.id))
-    );
-  }
-
-  function clearSelection() {
-    setSelected(new Set());
-  }
-
-  async function generateOneTarget(targetId: string) {
+  async function generateOneTarget(targetId: string, variationIndex: number) {
     const res = await fetch(`/api/campaigns/${params.id}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId }),
+      body: JSON.stringify({ targetId, variationIndex }),
     });
     const data = await readJsonResponse<{
       generated?: number;
       failed?: number;
       error?: string;
-      rateLimited?: boolean;
       target?: {
         id: string;
         generated_subject?: string;
@@ -169,86 +164,208 @@ export default function CampaignDetailPage({
             : t
         )
       );
+      setStats((s) => ({
+        ...s,
+        withDraft: data.generated ? s.withDraft + 1 : s.withDraft,
+        readyToSend: data.generated ? s.readyToSend + 1 : s.readyToSend,
+      }));
     }
 
     if (!res.ok || (data.failed ?? 0) > 0) {
       throw new Error(data.error || "Generation failed");
     }
-
     return data;
   }
 
+  async function sendOneTarget(targetId: string) {
+    const res = await fetch(`/api/campaigns/${params.id}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId }),
+    });
+    const data = await readJsonResponse<{
+      sent?: number;
+      failed?: number;
+      error?: string;
+      skipped?: boolean;
+      target?: { id: string; status: TargetStatus; error_message?: string };
+    }>(res);
+
+    if (data.skipped) return data;
+
+    if (data.target) {
+      setTargets((prev) =>
+        prev.map((t) =>
+          t.id === data.target!.id
+            ? {
+                ...t,
+                status: data.target!.status,
+                error_message: data.target!.error_message ?? null,
+                sent_at:
+                  data.target!.status === "sent"
+                    ? new Date().toISOString()
+                    : t.sent_at,
+              }
+            : t
+        )
+      );
+      if (data.target.status === "sent") {
+        setStats((s) => ({
+          ...s,
+          sent: s.sent + 1,
+          pending: Math.max(0, s.pending - 1),
+          readyToSend: Math.max(0, s.readyToSend - 1),
+        }));
+      } else if (data.target.status === "failed") {
+        setStats((s) => ({
+          ...s,
+          failed: s.failed + 1,
+        }));
+      }
+    }
+
+    if (!res.ok || (data.failed ?? 0) > 0) {
+      throw new Error(data.error || "Send failed");
+    }
+    return data;
+  }
+
+  async function fetchAllTargetIds(filter: "draft" | "send"): Promise<string[]> {
+    const res = await fetch(`/api/campaigns/${params.id}?limit=1&offset=0`);
+    const data = await readJsonResponse<{ stats?: typeof stats }>(res);
+    const totalCount = data.stats?.total ?? 0;
+    const ids: string[] = [];
+
+    for (let off = 0; off < totalCount; off += 200) {
+      const batchRes = await fetch(
+        `/api/campaigns/${params.id}?limit=200&offset=${off}`
+      );
+      const batchData = await readJsonResponse<{
+        targets?: CampaignTarget[];
+      }>(batchRes);
+      for (const t of batchData.targets ?? []) {
+        if (filter === "draft" && needsDraft(t)) ids.push(t.id);
+        if (filter === "send" && canSendTarget(t)) ids.push(t.id);
+      }
+    }
+    return ids;
+  }
+
   async function handleGenerateAll() {
-    const queue = targets.filter(needsDraft);
-    if (queue.length === 0) {
+    const toGenerate = await fetchAllTargetIds("draft");
+    if (toGenerate.length === 0) {
       setMessage("All targets already have drafts.");
       return;
     }
 
-    setGenerating(true);
+    setAutomationPhase("generating");
     setMessage(null);
     setError(null);
-    setGenerateProgress({ done: 0, total: queue.length });
+    setProgress({ done: 0, total: toGenerate.length });
 
     let generated = 0;
     let failed = 0;
 
     try {
-      for (let i = 0; i < queue.length; i++) {
-        let attempts = 0;
-        let done = false;
-
-        while (!done) {
-          try {
-            await generateOneTarget(queue[i].id);
-            generated++;
-            done = true;
-            setError(null);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : "Generation failed";
-            if (/rate limit/i.test(msg) && attempts < RATE_LIMIT_RETRIES) {
-              attempts++;
-              setError(
-                `AI rate limit — waiting 65s then continuing (${generated.toLocaleString()} drafts so far)…`
-              );
-              await new Promise((r) => setTimeout(r, RATE_LIMIT_WAIT_MS));
-              continue;
-            }
-            failed++;
-            done = true;
-            if (/rate limit/i.test(msg)) {
-              setError(
-                `${msg} Skipping one target; continuing (${generated.toLocaleString()} done).`
-              );
-            }
-          }
+      for (let i = 0; i < toGenerate.length; i++) {
+        try {
+          await generateOneTarget(toGenerate[i], i);
+          generated++;
+        } catch {
+          failed++;
         }
-
-        setGenerateProgress({ done: i + 1, total: queue.length });
-
-        if (i < queue.length - 1) {
-          await new Promise((r) => setTimeout(r, GENERATE_PAUSE_MS));
+        setProgress({ done: i + 1, total: toGenerate.length });
+        if (i < toGenerate.length - 1) {
+          await new Promise((r) => setTimeout(r, GENERATION_DELAY_MS));
         }
       }
-
-      setMessage(
-        `Generated ${generated.toLocaleString()} drafts` +
-          (failed > 0 ? ` (${failed.toLocaleString()} failed)` : "")
-      );
+      setMessage(`Generated ${generated} drafts (${failed} failed)`);
+      await loadCampaign();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation failed");
     } finally {
-      setGenerating(false);
-      setGenerateProgress(null);
+      setAutomationPhase("idle");
+      setProgress({ done: 0, total: 0 });
     }
   }
 
-  async function handleRegenerate(targetId: string) {
+  async function handleSendBatch(limit: number | "all") {
+    if (!health?.gmail) {
+      setError(
+        "Sales mailbox not configured. Add SALES_MAIL_APP_PASSWORD for sales.afn.alpha@gmail.com."
+      );
+      return;
+    }
+
+    const allReady = await fetchAllTargetIds("send");
+    const toSend =
+      limit === "all" ? allReady : allReady.slice(0, Math.max(1, limit));
+
+    if (toSend.length === 0) {
+      setMessage("No drafts ready to send.");
+      return;
+    }
+
+    setAutomationPhase("sending");
+    setMessage(null);
+    setError(null);
+    setProgress({ done: 0, total: toSend.length });
+
+    let sent = 0;
+    let failed = 0;
+
+    try {
+      for (let i = 0; i < toSend.length; i++) {
+        try {
+          await sendOneTarget(toSend[i]);
+          sent++;
+        } catch {
+          failed++;
+        }
+        setProgress({ done: i + 1, total: toSend.length });
+        if (i < toSend.length - 1) {
+          await new Promise((r) => setTimeout(r, sendDelayWithJitter()));
+        }
+      }
+      setMessage(
+        `Batch done: ${sent} sent, ${failed} failed` +
+          (limit !== "all" && allReady.length > toSend.length
+            ? ` (${allReady.length - toSend.length} still waiting)`
+            : "")
+      );
+      await loadCampaign();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Send failed");
+    } finally {
+      setAutomationPhase("idle");
+      setProgress({ done: 0, total: 0 });
+    }
+  }
+
+  async function handleSendOne(targetId: string) {
+    if (!health?.gmail) {
+      setError(
+        "Sales mailbox not configured. Add SALES_MAIL_APP_PASSWORD for sales.afn.alpha@gmail.com."
+      );
+      return;
+    }
+    setSendingId(targetId);
+    setError(null);
+    try {
+      await sendOneTarget(targetId);
+      setMessage("Email sent.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Send failed");
+    } finally {
+      setSendingId(null);
+    }
+  }
+
+  async function handleRegenerate(targetId: string, index: number) {
     setRegeneratingId(targetId);
     setError(null);
     try {
-      await generateOneTarget(targetId);
-      setMessage("Draft regenerated");
+      await generateOneTarget(targetId, index);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Regeneration failed");
     } finally {
@@ -256,91 +373,33 @@ export default function CampaignDetailPage({
     }
   }
 
-  function startEdit(target: CampaignTarget) {
-    setEditingId(target.id);
-    setEditSubject(target.generated_subject ?? "");
-    setEditBody(target.generated_body ?? "");
-  }
+  async function handleDeleteCampaign() {
+    if (
+      !window.confirm(
+        `Delete campaign "${campaign?.name}"? This removes all drafts and targets. Sent email logs stay.`
+      )
+    ) {
+      return;
+    }
 
-  async function saveDraft(targetId: string) {
-    setSavingId(targetId);
+    setDeleting(true);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/campaigns/${params.id}/targets/${targetId}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ subject: editSubject, body: editBody }),
-        }
-      );
-      const data = await readJsonResponse<{
-        target?: CampaignTarget;
-        error?: string;
-      }>(res);
-      if (!res.ok) throw new Error(data.error || "Failed to save draft");
-      if (data.target) {
-        setTargets((prev) =>
-          prev.map((t) =>
-            t.id === targetId
-              ? {
-                  ...t,
-                  generated_subject: data.target!.generated_subject,
-                  generated_body: data.target!.generated_body,
-                  status: data.target!.status,
-                  error_message: null,
-                }
-              : t
-          )
-        );
-      }
-      setEditingId(null);
-      setMessage("Draft saved");
+      const res = await fetch(`/api/campaigns/${params.id}`, { method: "DELETE" });
+      const data = await readJsonResponse<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || "Delete failed");
+      router.push("/dashboard/campaigns");
+      router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setSavingId(null);
+      setError(err instanceof Error ? err.message : "Delete failed");
+      setDeleting(false);
     }
   }
 
-  async function handleSend(opts?: { selectedOnly?: boolean }) {
-    setSending(true);
-    setMessage(null);
-    setError(null);
-    try {
-      const payload: { targetIds?: string[]; limit?: number } = {};
-      if (opts?.selectedOnly) {
-        if (selectedSendable.length === 0) {
-          throw new Error("Select at least one ready draft to send");
-        }
-        payload.targetIds = selectedSendable.map((t) => t.id);
-      }
-      if (typeof sendLimit === "number" && sendLimit > 0) {
-        payload.limit = sendLimit;
-      }
+  const isRunning = automationPhase !== "idle";
+  const canSend = readyToSend > 0 && !isRunning && Boolean(health?.gmail);
 
-      const res = await fetch(`/api/campaigns/${params.id}/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await readJsonResponse<{
-        sent?: number;
-        failed?: number;
-        error?: string;
-      }>(res);
-      if (!res.ok) throw new Error(data.error || "Send failed");
-      setMessage(`Sent ${data.sent} emails (${data.failed} failed)`);
-      setSelected(new Set());
-      await loadCampaign();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Send failed");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  if (loading) {
+  if (loading && !campaign) {
     return (
       <DashboardShell title="Campaign">
         <p className="text-sm text-muted">Loading...</p>
@@ -359,91 +418,121 @@ export default function CampaignDetailPage({
     );
   }
 
-  const filters: { id: StatusFilter; label: string; count: number }[] = [
-    { id: "all", label: "All", count: counts.total },
-    { id: "ready", label: "Ready", count: counts.ready },
-    { id: "needs_draft", label: "Needs draft", count: counts.needs },
-    { id: "pending", label: "Pending", count: targets.filter((t) => t.status === "pending").length },
-    { id: "sent", label: "Sent", count: counts.sent },
-    { id: "failed", label: "Failed", count: counts.failed },
-  ];
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const page = Math.floor(offset / PAGE_SIZE) + 1;
+  const batchLabel =
+    batchSize === "all" ? `Send all ready (${readyToSend})` : `Send next ${batchSize}`;
 
   return (
     <DashboardShell title={campaign.name}>
-      <div className="mb-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <Link
           href="/dashboard/campaigns"
           className="text-sm text-muted transition-colors hover:text-accent"
         >
           Back to campaigns
         </Link>
+        <button
+          type="button"
+          className="rounded-lg border border-danger/40 px-3 py-1.5 text-sm text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+          disabled={deleting || isRunning}
+          onClick={() => void handleDeleteCampaign()}
+        >
+          {deleting ? "Deleting..." : "Delete campaign"}
+        </button>
       </div>
 
+      {health && !health.ready ? (
+        <div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+          Setup required:{" "}
+          {!health.gmail
+            ? "Sales mailbox not configured (SALES_MAIL_APP_PASSWORD for sales.afn.alpha@gmail.com). "
+            : ""}
+          {health.ai === "none" ? "Add GROQ_API_KEY to environment variables. " : ""}
+        </div>
+      ) : health?.gmail ? (
+        <p className="mb-4 font-mono text-xs text-muted">
+          Sending from sales.afn.alpha@gmail.com
+        </p>
+      ) : null}
+
       <div className="panel mb-6 p-6">
-        <p className="data-label">Offer</p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="data-label">Offer</p>
+          <span className="font-mono text-xs uppercase text-muted">
+            {campaign.status}
+          </span>
+        </div>
         <p className="mt-2 whitespace-pre-wrap text-sm text-text">
           {campaign.offer_description}
         </p>
 
-        <div className="mt-4 flex flex-wrap items-end gap-3">
+        <div className="mt-4 grid gap-2 font-mono text-xs text-muted sm:grid-cols-5">
+          <span>{stats.total.toLocaleString()} targets</span>
+          <span>{stats.withDraft.toLocaleString()} drafts</span>
+          <span>{readyToSend.toLocaleString()} ready to send</span>
+          <span>{stats.sent.toLocaleString()} sent</span>
+          <span>{stats.failed.toLocaleString()} failed</span>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-end gap-3">
           <button
             type="button"
             className="btn-secondary"
-            disabled={generating || sending}
+            disabled={isRunning}
             onClick={() => void handleGenerateAll()}
           >
-            {generating ? "Generating..." : "Generate all drafts"}
+            {automationPhase === "generating"
+              ? "Generating..."
+              : "Generate drafts"}
           </button>
+
+          <div>
+            <label className="data-label mb-1 block">Batch size</label>
+            <select
+              className="input w-auto min-w-[8rem]"
+              value={batchSize === "all" ? "all" : String(batchSize)}
+              disabled={isRunning}
+              onChange={(e) => {
+                const v = e.target.value;
+                setBatchSize(v === "all" ? "all" : Number(v));
+              }}
+            >
+              {BATCH_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+              <option value="all">All ready ({readyToSend})</option>
+            </select>
+          </div>
+
           <button
             type="button"
             className="btn-primary"
             disabled={!canSend}
-            onClick={() => void handleSend()}
+            onClick={() => void handleSendBatch(batchSize)}
           >
-            {sending ? "Sending..." : "Send all ready"}
+            {automationPhase === "sending" ? "Sending..." : batchLabel}
           </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            disabled={!canSend || selectedSendable.length === 0}
-            onClick={() => void handleSend({ selectedOnly: true })}
-          >
-            Send selected ({selectedSendable.length})
-          </button>
-          <div>
-            <label className="data-label mb-1 block">Max to send</label>
-            <input
-              className="input w-28"
-              type="number"
-              min={1}
-              placeholder="All"
-              value={sendLimit}
-              onChange={(e) =>
-                setSendLimit(e.target.value ? Number(e.target.value) : "")
-              }
-            />
-          </div>
         </div>
-
-        <p className="mt-3 font-mono text-xs text-muted">
-          {counts.withDraft.toLocaleString()} of {counts.total.toLocaleString()}{" "}
-          drafts · {counts.ready.toLocaleString()} ready to send ·{" "}
-          {counts.sent.toLocaleString()} sent · {counts.failed.toLocaleString()}{" "}
-          failed
+        <p className="mt-3 text-xs text-muted">
+          Drafts stay until you send. Use batch size to send 10 / 25 / 50 / 100
+          at a time, or all ready. Each row also has its own Send button.
         </p>
       </div>
 
-      {generateProgress ? (
+      {isRunning && progress.total > 0 ? (
         <div className="mb-4 panel p-4">
           <p className="font-mono text-xs text-muted">
-            Generating {generateProgress.done.toLocaleString()} /{" "}
-            {generateProgress.total.toLocaleString()} drafts
+            {automationPhase === "generating" ? "Generating" : "Sending"}{" "}
+            {progress.done.toLocaleString()} / {progress.total.toLocaleString()}
           </p>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-bg">
             <div
               className="h-full bg-accent transition-all"
               style={{
-                width: `${(generateProgress.done / generateProgress.total) * 100}%`,
+                width: `${Math.min(100, (progress.done / progress.total) * 100)}%`,
               }}
             />
           </div>
@@ -461,163 +550,134 @@ export default function CampaignDetailPage({
         </p>
       ) : null}
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        {filters.map((f) => (
+      <div className="mb-4 flex flex-wrap gap-2">
+        {(
+          [
+            "all",
+            "ready",
+            "pending",
+            "sent",
+            "failed",
+          ] as StatusFilter[]
+        ).map((s) => (
           <button
-            key={f.id}
+            key={s}
             type="button"
             className={cn(
-              "rounded-lg border px-3 py-1.5 font-mono text-xs transition-colors",
-              statusFilter === f.id
-                ? "border-accent bg-accent/10 text-accent"
+              "rounded-lg border px-3 py-1 font-mono text-xs uppercase",
+              statusFilter === s
+                ? "border-accent text-accent"
                 : "border-border text-muted hover:text-text"
             )}
-            onClick={() => setStatusFilter(f.id)}
+            onClick={() => {
+              setOffset(0);
+              setStatusFilter(s);
+            }}
           >
-            {f.label} ({f.count})
+            {s === "ready" ? `ready (${readyToSend})` : s}
           </button>
         ))}
-        <button
-          type="button"
-          className="btn-secondary ml-auto text-xs"
-          onClick={selectVisibleReady}
-        >
-          Select visible ready
-        </button>
-        <button
-          type="button"
-          className="btn-secondary text-xs"
-          onClick={clearSelection}
-        >
-          Clear
-        </button>
       </div>
 
       <div className="space-y-4">
-        {filteredTargets.length === 0 ? (
+        {targets.length === 0 ? (
           <p className="text-sm text-muted">No targets match this filter.</p>
         ) : (
-          filteredTargets.map((target) => {
-            const sendable = isSendable(target);
-            const editing = editingId === target.id;
-            return (
-              <div key={target.id} className="panel p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={selected.has(target.id)}
-                      disabled={!sendable}
-                      onChange={() => toggleSelect(target.id)}
-                      title={sendable ? "Select for send" : "Not ready to send"}
-                    />
-                    <div>
-                      <p className="font-medium text-text">
-                        {target.companies?.name || "Unknown"}
-                      </p>
-                      <p className="mt-0.5 font-mono text-xs text-muted">
-                        {target.companies?.email}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      className={cn(
-                        "rounded border px-2 py-0.5 font-mono text-xs uppercase",
-                        TARGET_STATUS_COLORS[target.status]
-                      )}
-                    >
-                      {target.status}
-                    </span>
-                    {target.generated_subject && target.status !== "sent" ? (
-                      <button
-                        type="button"
-                        className="btn-secondary text-xs"
-                        disabled={sending || generating || editing}
-                        onClick={() => startEdit(target)}
-                      >
-                        Edit
-                      </button>
-                    ) : null}
+          targets.map((target, idx) => (
+            <div key={target.id} className="panel p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-medium text-text">
+                    {target.companies?.name || "Unknown"}
+                  </p>
+                  <p className="mt-0.5 font-mono text-xs text-muted">
+                    {target.companies?.email}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={cn(
+                      "rounded border px-2 py-0.5 font-mono text-xs uppercase",
+                      TARGET_STATUS_COLORS[target.status]
+                    )}
+                  >
+                    {target.status}
+                  </span>
+                  {canSendTarget(target) ? (
                     <button
                       type="button"
-                      className="btn-secondary text-xs"
-                      disabled={
-                        regeneratingId === target.id || sending || generating
-                      }
-                      onClick={() => void handleRegenerate(target.id)}
+                      className="btn-primary text-xs"
+                      disabled={sendingId === target.id || isRunning}
+                      onClick={() => void handleSendOne(target.id)}
                     >
-                      {regeneratingId === target.id ? "..." : "Regenerate"}
+                      {sendingId === target.id ? "Sending..." : "Send"}
                     </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs"
+                    disabled={regeneratingId === target.id || isRunning}
+                    onClick={() =>
+                      void handleRegenerate(target.id, offset + idx)
+                    }
+                  >
+                    {regeneratingId === target.id ? "..." : "Regenerate"}
+                  </button>
+                </div>
+              </div>
+
+              {target.generated_subject ? (
+                <div className="mt-4 space-y-3">
+                  <div>
+                    <p className="data-label">Subject</p>
+                    <p className="mt-1 font-mono text-sm text-text">
+                      {target.generated_subject}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="data-label">Body</p>
+                    <p className="mt-1 whitespace-pre-wrap font-mono text-sm text-muted">
+                      {target.generated_body}
+                    </p>
                   </div>
                 </div>
+              ) : (
+                <p className="mt-4 text-xs text-muted">No draft yet.</p>
+              )}
 
-                {editing ? (
-                  <div className="mt-4 space-y-3">
-                    <div>
-                      <label className="data-label mb-1 block">Subject</label>
-                      <input
-                        className="input"
-                        value={editSubject}
-                        onChange={(e) => setEditSubject(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="data-label mb-1 block">Body</label>
-                      <textarea
-                        className="input min-h-[140px] resize-y"
-                        value={editBody}
-                        onChange={(e) => setEditBody(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        className="btn-primary text-xs"
-                        disabled={savingId === target.id}
-                        onClick={() => void saveDraft(target.id)}
-                      >
-                        {savingId === target.id ? "Saving..." : "Save draft"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary text-xs"
-                        onClick={() => setEditingId(null)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : target.generated_subject ? (
-                  <div className="mt-4 space-y-3">
-                    <div>
-                      <p className="data-label">Subject</p>
-                      <p className="mt-1 text-sm text-text">
-                        {target.generated_subject}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="data-label">Body</p>
-                      <p className="mt-1 whitespace-pre-wrap text-sm text-muted">
-                        {target.generated_body}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-4 text-xs text-muted">No draft yet.</p>
-                )}
-
-                {target.error_message ? (
-                  <p className="mt-3 font-mono text-xs text-danger">
-                    {target.error_message}
-                  </p>
-                ) : null}
-              </div>
-            );
-          })
+              {target.error_message ? (
+                <p className="mt-3 font-mono text-xs text-danger">
+                  {target.error_message}
+                </p>
+              ) : null}
+            </div>
+          ))
         )}
       </div>
+
+      {total > PAGE_SIZE && statusFilter !== "ready" ? (
+        <div className="mt-4 flex items-center justify-between gap-4">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={offset === 0 || loading}
+            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+          >
+            Previous
+          </button>
+          <p className="font-mono text-xs text-muted">
+            Page {page} of {totalPages}
+          </p>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={offset + PAGE_SIZE >= total || loading}
+            onClick={() => setOffset(offset + PAGE_SIZE)}
+          >
+            Next
+          </button>
+        </div>
+      ) : null}
     </DashboardShell>
   );
 }

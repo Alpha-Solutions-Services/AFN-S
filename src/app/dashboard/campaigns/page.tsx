@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
+import { readJsonResponse } from "@/lib/fetch-json";
+import { DEFAULT_CAMPAIGN_OFFER } from "@/lib/talk-track";
 import type { Campaign } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -14,17 +16,26 @@ const STATUS_COLORS: Record<Campaign["status"], string> = {
   paused: "text-danger border-danger/40",
 };
 
-export default function CampaignsPage() {
+function CampaignsForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const companyId = searchParams.get("companyId");
+
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [offerDescription, setOfferDescription] = useState("");
+  const [name, setName] = useState(
+    companyId ? "Follow-up: interested carrier" : ""
+  );
+  const [offerDescription, setOfferDescription] = useState(
+    companyId ? DEFAULT_CAMPAIGN_OFFER : ""
+  );
   const [targetFilter, setTargetFilter] = useState<"not_contacted" | "all">(
     "not_contacted"
   );
+
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadCampaigns = useCallback(async () => {
     setLoading(true);
@@ -44,6 +55,22 @@ export default function CampaignsPage() {
     void loadCampaigns();
   }, [loadCampaigns]);
 
+  async function handleDelete(id: string, name: string) {
+    if (!window.confirm(`Delete campaign "${name}"?`)) return;
+    setDeletingId(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/campaigns/${id}`, { method: "DELETE" });
+      const data = await readJsonResponse<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || "Delete failed");
+      setCampaigns((prev) => prev.filter((c) => c.id !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setCreating(true);
@@ -57,9 +84,14 @@ export default function CampaignsPage() {
           name,
           offer_description: offerDescription,
           target_filter: targetFilter,
+          ...(companyId ? { company_ids: [companyId] } : {}),
         }),
       });
-      const data = await res.json();
+      const data = await readJsonResponse<{
+        campaign?: Campaign;
+        targets?: number;
+        error?: string;
+      }>(res);
       if (!res.ok) throw new Error(data.error || "Failed to create campaign");
 
       if (data.campaign?.id) {
@@ -80,6 +112,13 @@ export default function CampaignsPage() {
 
   return (
     <DashboardShell title="Campaigns">
+      {companyId ? (
+        <p className="mb-4 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-sm text-text">
+          Creating a campaign for the interested carrier from Call Queue (single
+          target).
+        </p>
+      ) : null}
+
       <div className="grid gap-8 lg:grid-cols-2">
         <div className="panel p-6">
           <h2 className="text-sm font-medium text-text">New campaign</h2>
@@ -104,74 +143,82 @@ export default function CampaignsPage() {
                 required
               />
             </div>
-            <div>
-              <label className="data-label mb-2 block">Target companies</label>
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2 text-sm text-muted">
-                  <input
-                    type="radio"
-                    name="target_filter"
-                    checked={targetFilter === "not_contacted"}
-                    onChange={() => setTargetFilter("not_contacted")}
-                  />
-                  Not yet contacted
-                </label>
-                <label className="flex items-center gap-2 text-sm text-muted">
-                  <input
-                    type="radio"
-                    name="target_filter"
-                    checked={targetFilter === "all"}
-                    onChange={() => setTargetFilter("all")}
-                  />
-                  All companies
-                </label>
+            {!companyId ? (
+              <div>
+                <label className="data-label mb-2 block">Target companies</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 text-sm text-muted">
+                    <input
+                      type="radio"
+                      name="target_filter"
+                      checked={targetFilter === "not_contacted"}
+                      onChange={() => setTargetFilter("not_contacted")}
+                    />
+                    Not contacted
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-muted">
+                    <input
+                      type="radio"
+                      name="target_filter"
+                      checked={targetFilter === "all"}
+                      onChange={() => setTargetFilter("all")}
+                    />
+                    All companies
+                  </label>
+                </div>
               </div>
-            </div>
+            ) : null}
             <button type="submit" className="btn-primary" disabled={creating}>
               {creating ? "Creating..." : "Create campaign"}
             </button>
+            {error ? (
+              <p className="font-mono text-xs text-danger">{error}</p>
+            ) : null}
           </form>
-          {error ? (
-            <p className="mt-4 font-mono text-xs text-danger">{error}</p>
-          ) : null}
         </div>
 
-        <div className="panel overflow-hidden">
-          <div className="border-b border-border px-4 py-3">
-            <h2 className="text-sm font-medium text-text">All campaigns</h2>
-          </div>
+        <div>
+          <h2 className="mb-4 text-sm font-medium text-text">Your campaigns</h2>
           {loading ? (
-            <p className="p-4 text-sm text-muted">Loading...</p>
+            <p className="text-sm text-muted">Loading...</p>
           ) : campaigns.length === 0 ? (
             <p className="p-4 text-sm text-muted">
               No campaigns yet. Create one to generate and send outreach.
             </p>
           ) : (
-            <ul>
-              {campaigns.map((campaign) => (
+            <ul className="space-y-2">
+              {campaigns.map((c) => (
                 <li
-                  key={campaign.id}
-                  className="border-b border-border/60 last:border-0"
+                  key={c.id}
+                  className="panel flex items-center justify-between gap-3 px-4 py-3"
                 >
                   <Link
-                    href={`/dashboard/campaigns/${campaign.id}`}
-                    className="flex items-center justify-between px-4 py-3 transition-colors hover:bg-bg"
+                    href={`/dashboard/campaigns/${c.id}`}
+                    className="min-w-0 flex-1 transition-colors hover:text-accent"
                   >
-                    <div>
-                      <p className="font-medium text-text">{campaign.name}</p>
-                      <p className="mt-0.5 font-mono text-xs text-muted">
-                        {new Date(campaign.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
+                    <p className="text-sm font-medium text-text">{c.name}</p>
+                    <p className="mt-1 font-mono text-xs text-muted">
+                      {new Date(c.created_at).toLocaleDateString()}
+                    </p>
+                  </Link>
+                  <div className="flex shrink-0 items-center gap-2">
                     <span
                       className={cn(
                         "rounded border px-2 py-0.5 font-mono text-xs uppercase",
-                        STATUS_COLORS[campaign.status]
+                        STATUS_COLORS[c.status]
                       )}
                     >
-                      {campaign.status}
+                      {c.status}
                     </span>
-                  </Link>
+                    <button
+                      type="button"
+                      className="rounded border border-danger/40 px-2 py-1 font-mono text-xs text-danger hover:bg-danger/10 disabled:opacity-50"
+                      disabled={deletingId === c.id}
+                      onClick={() => void handleDelete(c.id, c.name)}
+                    >
+                      {deletingId === c.id ? "..." : "Delete"}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -179,5 +226,19 @@ export default function CampaignsPage() {
         </div>
       </div>
     </DashboardShell>
+  );
+}
+
+export default function CampaignsPage() {
+  return (
+    <Suspense
+      fallback={
+        <DashboardShell title="Campaigns">
+          <p className="text-sm text-muted">Loading...</p>
+        </DashboardShell>
+      }
+    >
+      <CampaignsForm />
+    </Suspense>
   );
 }

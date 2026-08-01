@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
-import { getGoogleTokens } from "@/lib/google-tokens";
-import { getGmailAccessToken, sendGmailMessage, sleep } from "@/lib/gmail";
+import { isSalesMailConfigured, sendSalesEmail } from "@/lib/mail";
+import { isSyntheticEmail } from "@/lib/phone";
 import { getServiceRoleClient } from "@/lib/supabase/service-role";
 
-const SEND_DELAY_MS = 4000;
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 export async function POST(
   request: Request,
@@ -15,11 +16,18 @@ export async function POST(
   const { supabase, user } = auth;
   const { id: campaignId } = params;
 
-  let body: { targetIds?: string[]; limit?: number } = {};
+  let body: { targetId?: string } = {};
   try {
     body = await request.json().catch(() => ({}));
   } catch {
-    body = {};
+    // ignore
+  }
+
+  if (!body.targetId) {
+    return NextResponse.json(
+      { error: "targetId is required — send one email per request" },
+      { status: 400 }
+    );
   }
 
   const admin = getServiceRoleClient();
@@ -27,11 +35,13 @@ export async function POST(
     return NextResponse.json({ error: "Service role not configured" }, { status: 503 });
   }
 
-  const tokens = await getGoogleTokens(user.id);
-  if (!tokens?.refresh_token) {
+  if (!isSalesMailConfigured()) {
     return NextResponse.json(
-      { error: "Gmail not connected. Sign out and sign in again with Google." },
-      { status: 400 }
+      {
+        error:
+          "Sales mailbox not configured. Add SALES_MAIL_APP_PASSWORD for sales.afn.alpha@gmail.com in Vercel env.",
+      },
+      { status: 503 }
     );
   }
 
@@ -45,9 +55,7 @@ export async function POST(
     return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   }
 
-  await supabase.from("campaigns").update({ status: "sending" }).eq("id", campaignId);
-
-  let query = supabase
+  const { data: target, error: targetError } = await supabase
     .from("campaign_targets")
     .select(
       `
@@ -60,85 +68,68 @@ export async function POST(
     `
     )
     .eq("campaign_id", campaignId)
-    .in("status", ["pending", "failed"])
-    .not("generated_subject", "is", null)
-    .not("generated_body", "is", null);
+    .eq("id", body.targetId)
+    .single();
 
-  if (body.targetIds && body.targetIds.length > 0) {
-    query = query.in("id", body.targetIds);
+  if (targetError || !target) {
+    return NextResponse.json({ error: "Target not found" }, { status: 404 });
   }
 
-  const { data: targetsRaw, error: targetsError } = await query;
-
-  if (targetsError) {
-    await supabase.from("campaigns").update({ status: "paused" }).eq("id", campaignId);
-    return NextResponse.json({ error: targetsError.message }, { status: 500 });
+  if (target.status === "sent") {
+    return NextResponse.json({ error: "Already sent", skipped: true }, { status: 409 });
   }
 
-  let targets = targetsRaw ?? [];
-  if (typeof body.limit === "number" && body.limit > 0) {
-    targets = targets.slice(0, body.limit);
+  const company = Array.isArray(target.companies)
+    ? target.companies[0]
+    : target.companies;
+  const recipientEmail = company?.email?.trim().toLowerCase() ?? "";
+
+  if (
+    !recipientEmail ||
+    isSyntheticEmail(recipientEmail) ||
+    !target.generated_subject ||
+    !target.generated_body
+  ) {
+    const message = !recipientEmail || isSyntheticEmail(recipientEmail)
+      ? "Missing real email (phone-only contact)"
+      : "Missing draft content";
+    await supabase
+      .from("campaign_targets")
+      .update({ status: "failed", error_message: message })
+      .eq("id", target.id);
+    return NextResponse.json(
+      {
+        sent: 0,
+        failed: 1,
+        error: message,
+        target: { id: target.id, status: "failed" as const, error_message: message },
+      },
+      { status: 400 }
+    );
   }
 
-  if (targets.length === 0) {
-    await supabase.from("campaigns").update({ status: "completed" }).eq("id", campaignId);
-    return NextResponse.json({ sent: 0, failed: 0 });
-  }
-
-  let accessToken: string;
   try {
-    accessToken = await getGmailAccessToken(tokens.refresh_token);
-  } catch (err) {
-    await supabase.from("campaigns").update({ status: "paused" }).eq("id", campaignId);
-    const message = err instanceof Error ? err.message : "Token refresh failed";
-    return NextResponse.json({ error: message }, { status: 400 });
-  }
+    const { messageId } = await sendSalesEmail({
+      to: recipientEmail,
+      subject: target.generated_subject,
+      body: target.generated_body,
+    });
 
-  let sent = 0;
-  let failed = 0;
+    await supabase
+      .from("campaign_targets")
+      .update({
+        status: "sent",
+        sent_at: new Date().toISOString(),
+        error_message: null,
+      })
+      .eq("id", target.id);
 
-  for (let i = 0; i < targets.length; i++) {
-    const target = targets[i];
-    const company = Array.isArray(target.companies)
-      ? target.companies[0]
-      : target.companies;
-    const recipientEmail = company?.email;
-
-    if (!recipientEmail || !target.generated_subject || !target.generated_body) {
-      failed++;
-      await supabase
-        .from("campaign_targets")
-        .update({
-          status: "failed",
-          error_message: "Missing email or draft content",
-        })
-        .eq("id", target.id);
-      continue;
-    }
+    await supabase
+      .from("companies")
+      .update({ stage: "emailed" })
+      .eq("id", target.company_id);
 
     try {
-      const { messageId } = await sendGmailMessage({
-        accessToken,
-        from: tokens.gmail_address,
-        to: recipientEmail,
-        subject: target.generated_subject,
-        body: target.generated_body,
-      });
-
-      await supabase
-        .from("campaign_targets")
-        .update({
-          status: "sent",
-          sent_at: new Date().toISOString(),
-          error_message: null,
-        })
-        .eq("id", target.id);
-
-      await supabase
-        .from("companies")
-        .update({ stage: "emailed" })
-        .eq("id", target.company_id);
-
       await admin.from("email_logs").insert({
         owner_id: user.id,
         campaign_id: campaignId,
@@ -149,20 +140,24 @@ export async function POST(
         success: true,
         gmail_message_id: messageId,
       });
+    } catch {
+      // sent — don't fail if logging fails
+    }
 
-      sent++;
-    } catch (err) {
-      failed++;
-      const message = err instanceof Error ? err.message : "Send failed";
+    return NextResponse.json({
+      sent: 1,
+      failed: 0,
+      target: { id: target.id, status: "sent" as const },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Send failed";
 
-      await supabase
-        .from("campaign_targets")
-        .update({
-          status: "failed",
-          error_message: message,
-        })
-        .eq("id", target.id);
+    await supabase
+      .from("campaign_targets")
+      .update({ status: "failed", error_message: message })
+      .eq("id", target.id);
 
+    try {
       await admin.from("email_logs").insert({
         owner_id: user.id,
         campaign_id: campaignId,
@@ -173,15 +168,15 @@ export async function POST(
         success: false,
         error_message: message,
       });
+    } catch {
+      // ignore log failure
     }
 
-    if (i < targets.length - 1) {
-      await sleep(SEND_DELAY_MS);
-    }
+    return NextResponse.json({
+      sent: 0,
+      failed: 1,
+      error: message,
+      target: { id: target.id, status: "failed" as const, error_message: message },
+    });
   }
-
-  const finalStatus = failed > 0 && sent === 0 ? "paused" : "completed";
-  await supabase.from("campaigns").update({ status: finalStatus }).eq("id", campaignId);
-
-  return NextResponse.json({ sent, failed });
 }
