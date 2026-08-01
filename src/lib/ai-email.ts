@@ -1,14 +1,15 @@
 import type { Company, EmailDraft } from "@/lib/types";
+import { SALES_EMAIL_SIGNATURE } from "@/lib/email-signature";
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GEMINI_MODEL = "gemini-2.0-flash";
 
 const OPENER_STYLES = [
-  "Start with a specific observation about their company or industry.",
-  "Open with a short question about their current dispatch situation.",
-  "Lead with a concrete rate or benefit number from the offer.",
-  "Reference their location or fleet type if known from the data.",
-  "Use a direct, peer-to-peer tone — like one operator talking to another.",
+  "Open with one specific, factual detail about their company (fleet, lanes, MC notes, or industry) — never a generic compliment.",
+  "Ask one short, natural question about how they handle dispatch or empty miles today.",
+  "Lead with a concrete, believable benefit from the offer (rates, lanes, or time saved) without hype.",
+  "If location or fleet type is in the data, reference it once in plain language.",
+  "Write like a dispatch manager emailing another operator — peer to peer, calm and direct.",
 ];
 
 function extractJson(text: string): EmailDraft {
@@ -22,11 +23,37 @@ function extractJson(text: string): EmailDraft {
   }
 }
 
+function stripAiSignature(body: string): string {
+  // Remove any signature-like block the model invented so we append ours once
+  const cutMarkers = [
+    /\n[-–—]\s*\nMuhammad Mikran[\s\S]*$/i,
+    /\nBest regards,[\s\S]*$/i,
+    /\nRegards,[\s\S]*$/i,
+    /\nThanks,[\s\S]*$/i,
+    /\nThank you,[\s\S]*$/i,
+    /\nSincerely,[\s\S]*$/i,
+  ];
+  let cleaned = body.trim();
+  for (const re of cutMarkers) {
+    cleaned = cleaned.replace(re, "").trim();
+  }
+  return cleaned;
+}
+
+function withSignature(draft: EmailDraft): EmailDraft {
+  const subject = draft.subject.trim().replace(/\s+/g, " ");
+  const body = stripAiSignature(draft.body);
+  return {
+    subject,
+    body: `${body}\n${SALES_EMAIL_SIGNATURE}`,
+  };
+}
+
 function validateDraft(draft: EmailDraft): EmailDraft {
   if (!draft.subject?.trim() || !draft.body?.trim()) {
     throw new Error("AI response missing subject or body");
   }
-  return draft;
+  return withSignature(draft);
 }
 
 function formatExtra(extra: Record<string, unknown> | undefined): string {
@@ -58,7 +85,8 @@ function buildPrompt(opts: {
     .join(", ");
   const styleHint = OPENER_STYLES[variationIndex % OPENER_STYLES.length];
 
-  return `Write a unique cold outreach email for this freight carrier prospect.
+  return `You write deliverable cold emails for US freight carriers / owner-operators.
+Goal: helpful, human outreach that inbox filters accept — NOT spammy sales blasts.
 
 Company: ${company.name}
 Industry: ${company.industry || "Unknown"}
@@ -69,18 +97,26 @@ Notes: ${company.notes || "None"}
 Additional data:
 ${formatExtra(company.extra)}
 
-What we are offering:
+What we are offering (use only facts from this; do not invent rates or guarantees):
 ${offerDescription}
 
-Requirements:
-- Under 120 words in the body
-- Personalized to THIS company — mention something specific from their data
-- One clear call to action (reply or quick call)
+Subject line rules (critical for deliverability):
+- 4–8 words, Title Case or sentence case — never ALL CAPS
+- No exclamation marks, no emoji, no "$", no "FREE", "guaranteed", "urgent", "act now", "limited time"
+- Sound like a normal business email subject (example vibe: "Quick question about ${company.name}" or "Dispatch help for your trucks" — invent a unique one)
+- Do not start with "Re:" or "Fwd:"
+
+Body rules (critical for deliverability):
+- 60–110 words of body only (signature is added by the system — do NOT write a signature, name, title, phone, or website at the end)
+- Plain text only — no HTML, no markdown, no bullet lists with symbols, no links unless one plain domain is already in the offer
 - ${styleHint}
-- Vary subject line structure — do NOT reuse the same subject pattern as other emails
-- No corporate buzzwords, no "I hope this email finds you well"
-- Sound human, not like a mass blast
-- Each email must read differently from others in the same campaign
+- Personalize with one real detail from the company data above
+- Soft CTA: reply to this email or call if interested — no pressure language
+- One idea per email; short paragraphs (1–2 sentences each)
+- Avoid spam triggers: "make money", "act now", "100%", "risk-free", "click here", "congratulations", excessive punctuation, ALL CAPS words
+- Do not claim you already work with them or that you called previously unless notes say so
+- No "I hope this email finds you well", no "synergy", no "touching base", no "circle back"
+- Sound like Muhammad Mikran (dispatch manager) writing one careful email — not a mass campaign
 
 Respond with ONLY raw JSON, no markdown fences:
 {"subject": "...", "body": "..."}`;
@@ -99,7 +135,7 @@ async function generateWithGroq(prompt: string, variationIndex: number): Promise
     body: JSON.stringify({
       model: GROQ_MODEL,
       max_tokens: 1024,
-      temperature: 0.85 + (variationIndex % 3) * 0.05,
+      temperature: 0.75 + (variationIndex % 3) * 0.05,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: prompt }],
     }),
@@ -136,7 +172,7 @@ async function generateWithGemini(prompt: string): Promise<EmailDraft> {
         generationConfig: {
           responseMimeType: "application/json",
           maxOutputTokens: 1024,
-          temperature: 0.9,
+          temperature: 0.8,
         },
       }),
     }

@@ -1,18 +1,31 @@
 import nodemailer from "nodemailer";
+import {
+  SALES_REPLY_TO,
+  SALES_SENDER_NAME,
+  buildSalesEmailHtml,
+  ensureSalesSignature,
+} from "@/lib/email-signature";
 import { isSyntheticEmail } from "@/lib/phone";
 
 const DEFAULT_FROM = "sales.afn.alpha@gmail.com";
 
 export function getSalesMailFrom(): string {
+  return process.env.SALES_MAIL_FROM?.trim().toLowerCase() || DEFAULT_FROM;
+}
+
+export function getSalesMailFromName(): string {
+  return process.env.SALES_MAIL_FROM_NAME?.trim() || SALES_SENDER_NAME;
+}
+
+export function getSalesReplyTo(): string {
   return (
-    process.env.SALES_MAIL_FROM?.trim().toLowerCase() || DEFAULT_FROM
+    process.env.SALES_MAIL_REPLY_TO?.trim().toLowerCase() || SALES_REPLY_TO
   );
 }
 
 /** Shared sales mailbox via Gmail SMTP + App Password (not per-user OAuth). */
 export function isSalesMailConfigured(): boolean {
-  const user =
-    process.env.SALES_MAIL_USER?.trim() || getSalesMailFrom();
+  const user = process.env.SALES_MAIL_USER?.trim() || getSalesMailFrom();
   const pass = process.env.SALES_MAIL_APP_PASSWORD?.trim();
   return Boolean(user && pass);
 }
@@ -23,7 +36,7 @@ function getSmtpAuth() {
   const pass = process.env.SALES_MAIL_APP_PASSWORD?.trim();
   if (!user || !pass) {
     throw new Error(
-      "Sales mailbox not configured. Set SALES_MAIL_USER and SALES_MAIL_APP_PASSWORD (Gmail App Password for sales.afn.alpha@gmail.com)."
+      "Sales mailbox not configured. Set SALES_MAIL_USER and SALES_MAIL_APP_PASSWORD (Gmail App Password)."
     );
   }
   return { user, pass };
@@ -43,6 +56,10 @@ export async function sendSalesEmail(opts: {
 
   const auth = getSmtpAuth();
   const from = getSalesMailFrom();
+  const fromName = getSalesMailFromName();
+  const replyTo = getSalesReplyTo();
+  const text = ensureSalesSignature(opts.body);
+  const html = buildSalesEmailHtml(text);
 
   const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
@@ -51,11 +68,18 @@ export async function sendSalesEmail(opts: {
     auth,
   });
 
+  // Authenticated mailbox = sales.afn.alpha@gmail.com (or SALES_MAIL_USER).
+  // Display name + Reply-To make it look/feel like Mikran's Gmail suite identity.
   const info = await transporter.sendMail({
-    from: `Alpha Freight Network <${from}>`,
+    from: `"${fromName}" <${from}>`,
+    replyTo,
     to,
     subject: opts.subject,
-    text: opts.body,
+    text,
+    html,
+    headers: {
+      "X-Mailer": "Alpha Sales Point",
+    },
   });
 
   return { messageId: info.messageId || `smtp-${Date.now()}` };

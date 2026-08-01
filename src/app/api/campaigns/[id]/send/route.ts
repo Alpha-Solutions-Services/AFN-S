@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
+import { ensureSalesSignature } from "@/lib/email-signature";
 import { isSalesMailConfigured, sendSalesEmail } from "@/lib/mail";
 import { isSyntheticEmail } from "@/lib/phone";
 import { getServiceRoleClient } from "@/lib/supabase/service-role";
@@ -109,10 +110,11 @@ export async function POST(
   }
 
   try {
+    const bodyWithSignature = ensureSalesSignature(target.generated_body);
     const { messageId } = await sendSalesEmail({
       to: recipientEmail,
       subject: target.generated_subject,
-      body: target.generated_body,
+      body: bodyWithSignature,
     });
 
     await supabase
