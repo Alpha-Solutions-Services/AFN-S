@@ -107,16 +107,19 @@ Subject line rules (critical for deliverability):
 - Do not start with "Re:" or "Fwd:"
 
 Body rules (critical for deliverability):
-- 60–110 words of body only (signature is added by the system — do NOT write a signature, name, title, phone, or website at the end)
-- Plain text only — no HTML, no markdown, no bullet lists with symbols, no links unless one plain domain is already in the offer
+- 60–100 words of body only
+- Signature, phone numbers, and CTA are added by the system — do NOT write any phone number, do NOT write "call us at …", do NOT invent contact info
+- NEVER invent phone numbers, emails, websites, or rates not in the offer
+- Plain text only — no HTML, no markdown, no bullet symbols
 - ${styleHint}
 - Personalize with one real detail from the company data above
-- Soft CTA: reply to this email or call if interested — no pressure language
+- Soft close in one sentence: invite them to reply to this email (system adds Google Voice CTA)
 - One idea per email; short paragraphs (1–2 sentences each)
 - Avoid spam triggers: "make money", "act now", "100%", "risk-free", "click here", "congratulations", excessive punctuation, ALL CAPS words
 - Do not claim you already work with them or that you called previously unless notes say so
 - No "I hope this email finds you well", no "synergy", no "touching base", no "circle back"
 - Sound like Muhammad Mikran (dispatch manager) writing one careful email — not a mass campaign
+- The company Phone field above is THEIR number (prospect), not ours — never put it in the email as a call-to-action
 
 Respond with ONLY raw JSON, no markdown fences:
 {"subject": "...", "body": "..."}`;
