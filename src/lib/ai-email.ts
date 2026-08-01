@@ -1,5 +1,5 @@
 import type { Company, EmailDraft } from "@/lib/types";
-import { SALES_EMAIL_SIGNATURE } from "@/lib/email-signature";
+import { ensureSalesSignature } from "@/lib/email-signature";
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GEMINI_MODEL = "gemini-2.0-flash";
@@ -24,7 +24,6 @@ function extractJson(text: string): EmailDraft {
 }
 
 function stripAiSignature(body: string): string {
-  // Remove any signature-like block the model invented so we append ours once
   const cutMarkers = [
     /\n[-–—]\s*\nMuhammad Mikran[\s\S]*$/i,
     /\nBest regards,[\s\S]*$/i,
@@ -42,10 +41,9 @@ function stripAiSignature(body: string): string {
 
 function withSignature(draft: EmailDraft): EmailDraft {
   const subject = draft.subject.trim().replace(/\s+/g, " ");
-  const body = stripAiSignature(draft.body);
   return {
     subject,
-    body: `${body}\n${SALES_EMAIL_SIGNATURE}`,
+    body: ensureSalesSignature(stripAiSignature(draft.body)),
   };
 }
 
@@ -125,10 +123,19 @@ Respond with ONLY raw JSON, no markdown fences:
 {"subject": "...", "body": "..."}`;
 }
 
-async function generateWithGroq(prompt: string, variationIndex: number): Promise<EmailDraft> {
-  const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey) throw new Error("GROQ_API_KEY not configured");
+function getGroqApiKeys(): string[] {
+  const keys = [
+    process.env.GROQ_API_KEY?.trim(),
+    process.env.GROQ_API_KEY_2?.trim(),
+  ].filter((k): k is string => Boolean(k));
+  return Array.from(new Set(keys));
+}
 
+async function callGroq(
+  apiKey: string,
+  prompt: string,
+  variationIndex: number
+): Promise<EmailDraft> {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -150,12 +157,46 @@ async function generateWithGroq(prompt: string, variationIndex: number): Promise
   };
 
   if (!res.ok) {
-    throw new Error(data.error?.message || "Groq API request failed");
+    const message = data.error?.message || "Groq API request failed";
+    const err = new Error(message) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
 
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new Error("Groq returned empty response");
   return validateDraft(extractJson(text));
+}
+
+export function isRateLimitError(message: string): boolean {
+  return /quota|rate limit|too many requests|429|capacity|tpm|rpm/i.test(message);
+}
+
+async function generateWithGroq(
+  prompt: string,
+  variationIndex: number
+): Promise<EmailDraft> {
+  const keys = getGroqApiKeys();
+  if (keys.length === 0) throw new Error("GROQ_API_KEY not configured");
+
+  let lastError: Error | null = null;
+  for (let i = 0; i < keys.length; i++) {
+    try {
+      return await callGroq(keys[i], prompt, variationIndex);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      const status = (err as { status?: number })?.status;
+      const msg = lastError.message;
+      const shouldFailover =
+        i < keys.length - 1 &&
+        (status === 429 ||
+          status === 401 ||
+          status === 403 ||
+          isRateLimitError(msg));
+      if (!shouldFailover) throw lastError;
+    }
+  }
+  throw lastError ?? new Error("Groq API request failed");
 }
 
 async function generateWithGemini(prompt: string): Promise<EmailDraft> {
@@ -198,9 +239,13 @@ async function generateWithGemini(prompt: string): Promise<EmailDraft> {
 }
 
 export function getConfiguredAiProvider(): "groq" | "gemini" | null {
-  if (process.env.GROQ_API_KEY?.trim()) return "groq";
+  if (getGroqApiKeys().length > 0) return "groq";
   if (process.env.GEMINI_API_KEY?.trim()) return "gemini";
   return null;
+}
+
+export function getGroqKeyCount(): number {
+  return getGroqApiKeys().length;
 }
 
 export async function generateEmailDraft(opts: {
@@ -215,16 +260,21 @@ export async function generateEmailDraft(opts: {
   const prompt = buildPrompt(opts);
   const provider = getConfiguredAiProvider();
 
-  if (provider === "groq") return generateWithGroq(prompt, variationIndex);
+  if (provider === "groq") {
+    try {
+      return await generateWithGroq(prompt, variationIndex);
+    } catch (err) {
+      if (process.env.GEMINI_API_KEY?.trim()) {
+        return generateWithGemini(prompt);
+      }
+      throw err;
+    }
+  }
   if (provider === "gemini") return generateWithGemini(prompt);
 
   throw new Error(
-    "No AI key configured. Add GROQ_API_KEY (free at console.groq.com) or GEMINI_API_KEY."
+    "No AI key configured. Add GROQ_API_KEY (and optional GROQ_API_KEY_2) or GEMINI_API_KEY."
   );
-}
-
-export function isRateLimitError(message: string): boolean {
-  return /quota|rate limit|too many requests|429|capacity/i.test(message);
 }
 
 export function parseRetrySeconds(message: string): number | null {
