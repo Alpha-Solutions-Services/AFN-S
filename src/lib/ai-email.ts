@@ -1,5 +1,5 @@
 import type { Company, EmailDraft } from "@/lib/types";
-import { ensureSalesSignature } from "@/lib/email-signature";
+import { ALPHA_FREIGHT_PITCH, ensureSalesSignature } from "@/lib/email-signature";
 
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 const GEMINI_MODEL = "gemini-2.0-flash";
@@ -95,29 +95,34 @@ Notes: ${company.notes || "None"}
 Additional data:
 ${formatExtra(company.extra)}
 
-What we are offering (use only facts from this; do not invent rates or guarantees):
+What we are offering (use ONLY these product facts — do not invent fees, lanes, or promises):
 ${offerDescription}
+
+Canonical Alpha Freight pitch (always true — weave 1–2 of these into the opener when natural):
+- ${ALPHA_FREIGHT_PITCH.brand}: ${ALPHA_FREIGHT_PITCH.tagline}
+- ${ALPHA_FREIGHT_PITCH.fee}
+- ${ALPHA_FREIGHT_PITCH.equipment}
+- ${ALPHA_FREIGHT_PITCH.howItWorks}
+- Website: ${ALPHA_FREIGHT_PITCH.website}
 
 Subject line rules (critical for deliverability):
 - 4–8 words, Title Case or sentence case — never ALL CAPS
 - No exclamation marks, no emoji, no "$", no "FREE", "guaranteed", "urgent", "act now", "limited time"
-- Sound like a normal business email subject (example vibe: "Quick question about ${company.name}" or "Dispatch help for your trucks" — invent a unique one)
+- Sound like a normal business email subject
 - Do not start with "Re:" or "Fwd:"
 
 Body rules (critical for deliverability):
-- 60–100 words of body only
-- Signature, phone numbers, and CTA are added by the system — do NOT write any phone number, do NOT write "call us at …", do NOT invent contact info
-- NEVER invent phone numbers, emails, websites, or rates not in the offer
-- Plain text only — no HTML, no markdown, no bullet symbols
+- Write ONLY a short personalized opener: 2–3 short paragraphs, 70–110 words total
+- The system appends the full structured pitch, Google Voice CTA, and signature — do NOT write those yourself
+- Do NOT write any phone number, fee table, bullet list, or website URL in the opener
+- NEVER invent phone numbers, emails, websites, or rates not listed above
+- Plain text only — no HTML, no markdown
 - ${styleHint}
 - Personalize with one real detail from the company data above
-- Soft close in one sentence: invite them to reply to this email (system adds Google Voice CTA)
-- One idea per email; short paragraphs (1–2 sentences each)
-- Avoid spam triggers: "make money", "act now", "100%", "risk-free", "click here", "congratulations", excessive punctuation, ALL CAPS words
-- Do not claim you already work with them or that you called previously unless notes say so
-- No "I hope this email finds you well", no "synergy", no "touching base", no "circle back"
-- Sound like Muhammad Mikran (dispatch manager) writing one careful email — not a mass campaign
-- The company Phone field above is THEIR number (prospect), not ours — never put it in the email as a call-to-action
+- End with one soft line inviting a reply (system adds call CTA)
+- Avoid spam triggers and corporate fluff
+- Sound like Muhammad Mikran (dispatch manager) — peer to peer
+- The company Phone field is THEIR number — never use it as our CTA
 
 Respond with ONLY raw JSON, no markdown fences:
 {"subject": "...", "body": "..."}`;

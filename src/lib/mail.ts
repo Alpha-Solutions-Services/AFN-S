@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import {
+  SALES_CC,
   SALES_REPLY_TO,
   SALES_SENDER_NAME,
   buildSalesEmailHtml,
@@ -21,6 +22,10 @@ export function getSalesReplyTo(): string {
   return (
     process.env.SALES_MAIL_REPLY_TO?.trim().toLowerCase() || SALES_REPLY_TO
   );
+}
+
+export function getSalesCc(): string {
+  return process.env.SALES_MAIL_CC?.trim().toLowerCase() || SALES_CC;
 }
 
 /** Shared sales mailbox via Gmail SMTP + App Password (not per-user OAuth). */
@@ -58,6 +63,7 @@ export async function sendSalesEmail(opts: {
   const from = getSalesMailFrom();
   const fromName = getSalesMailFromName();
   const replyTo = getSalesReplyTo();
+  const cc = getSalesCc();
   const text = ensureSalesSignature(opts.body);
   const html = buildSalesEmailHtml(text);
 
@@ -68,12 +74,11 @@ export async function sendSalesEmail(opts: {
     auth,
   });
 
-  // Authenticated mailbox = sales.afn.alpha@gmail.com (or SALES_MAIL_USER).
-  // Display name + Reply-To make it look/feel like Mikran's Gmail suite identity.
   const info = await transporter.sendMail({
     from: `"${fromName}" <${from}>`,
     replyTo,
     to,
+    cc: cc && cc !== to ? cc : undefined,
     subject: opts.subject,
     text,
     html,
