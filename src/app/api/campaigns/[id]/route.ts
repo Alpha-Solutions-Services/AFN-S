@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
+import { computeAbOpenRates } from "@/lib/deliverability";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -41,7 +42,8 @@ export async function GET(
         website,
         notes,
         phone,
-        extra
+        extra,
+        do_not_email
       )
     `,
       { count: "exact" }
@@ -61,16 +63,31 @@ export async function GET(
 
   const { data: allTargets } = await supabase
     .from("campaign_targets")
-    .select("status, generated_subject, generated_body, opened_at, replied_at")
+    .select(
+      "status, generated_subject, generated_body, opened_at, replied_at, bounced_at, subject_variant, follow_up_step, next_follow_up_at"
+    )
     .eq("campaign_id", id);
 
+  const nowIso = new Date().toISOString();
   const stats = {
     total: allTargets?.length ?? 0,
     pending: allTargets?.filter((t) => t.status === "pending").length ?? 0,
     sent: allTargets?.filter((t) => t.status === "sent").length ?? 0,
     failed: allTargets?.filter((t) => t.status === "failed").length ?? 0,
+    bounced: allTargets?.filter((t) => t.status === "bounced" || t.bounced_at).length ?? 0,
     opened: allTargets?.filter((t) => Boolean(t.opened_at)).length ?? 0,
     replied: allTargets?.filter((t) => Boolean(t.replied_at)).length ?? 0,
+    followUpsDue:
+      allTargets?.filter(
+        (t) =>
+          t.status === "sent" &&
+          t.opened_at &&
+          !t.replied_at &&
+          !t.bounced_at &&
+          (t.follow_up_step ?? 0) < 2 &&
+          t.next_follow_up_at &&
+          t.next_follow_up_at <= nowIso
+      ).length ?? 0,
     withDraft:
       allTargets?.filter((t) => t.generated_subject && t.generated_body).length ??
       0,
@@ -83,6 +100,8 @@ export async function GET(
       ).length ?? 0,
   };
 
+  const abStats = computeAbOpenRates(allTargets ?? []);
+
   return NextResponse.json({
     campaign,
     targets: targets ?? [],
@@ -90,6 +109,7 @@ export async function GET(
     offset,
     limit,
     stats,
+    abStats,
   });
 }
 

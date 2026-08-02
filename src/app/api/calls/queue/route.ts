@@ -8,9 +8,9 @@ const MAX_LIMIT = 200;
  * Prioritized call queue:
  * - has phone
  * - not lost / won
- * - never called OR next_call_at <= now
+ * - never called OR next_call_at <= now (unless focus=opened_unreplied)
  * - exclude companies with a do_not_call log
- * Sort: next_call_at ASC nulls first, then fewest attempts, then name
+ * Optional focus=opened_unreplied: opened email, no reply yet
  */
 export async function GET(request: Request) {
   const auth = await requireUser();
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     MAX_LIMIT,
     Math.max(1, Number(searchParams.get("limit") ?? DEFAULT_LIMIT))
   );
-
+  const focus = searchParams.get("focus")?.trim() || "all";
   const nowIso = new Date().toISOString();
 
   const { data: dncRows } = await supabase
@@ -34,6 +34,39 @@ export async function GET(request: Request) {
   const dncIds = Array.from(
     new Set((dncRows ?? []).map((r) => r.company_id as string))
   );
+  const dncSet = new Set(dncIds);
+
+  let focusCompanyIds: string[] | null = null;
+  if (focus === "opened_unreplied") {
+    const { data: openedRows, error: openedError } = await supabase
+      .from("campaign_targets")
+      .select("company_id, campaigns!inner(owner_id)")
+      .eq("status", "sent")
+      .not("opened_at", "is", null)
+      .is("replied_at", null)
+      .eq("campaigns.owner_id", user.id);
+
+    if (openedError) {
+      return NextResponse.json({ error: openedError.message }, { status: 500 });
+    }
+
+    focusCompanyIds = Array.from(
+      new Set(
+        (openedRows ?? [])
+          .map((r) => r.company_id as string | null)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+
+    if (focusCompanyIds.length === 0) {
+      return NextResponse.json({
+        companies: [],
+        total: 0,
+        asOf: nowIso,
+        focus,
+      });
+    }
+  }
 
   let query = supabase
     .from("companies")
@@ -42,15 +75,19 @@ export async function GET(request: Request) {
     .not("phone", "is", null)
     .neq("phone", "")
     .not("stage", "in", '("lost","won")')
-    .or(`next_call_at.is.null,next_call_at.lte.${nowIso}`)
     .order("next_call_at", { ascending: true, nullsFirst: true })
     .order("call_attempts", { ascending: true })
     .order("name", { ascending: true })
     .limit(limit);
 
-  if (dncIds.length > 0) {
-    const list = `(${dncIds.map((id) => `"${id}"`).join(",")})`;
-    query = query.not("id", "in", list);
+  if (focusCompanyIds) {
+    query = query.in("id", focusCompanyIds);
+  } else {
+    query = query.or(`next_call_at.is.null,next_call_at.lte.${nowIso}`);
+    if (dncIds.length > 0) {
+      const list = `(${dncIds.map((id) => `"${id}"`).join(",")})`;
+      query = query.not("id", "in", list);
+    }
   }
 
   const { data, error } = await query;
@@ -59,8 +96,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const dncSet = new Set(dncIds);
-  // Extra guard: dialable phone + never DNC
   const companies = (data ?? []).filter(
     (c) =>
       !dncSet.has(c.id) &&
@@ -72,5 +107,6 @@ export async function GET(request: Request) {
     companies,
     total: companies.length,
     asOf: nowIso,
+    focus,
   });
 }

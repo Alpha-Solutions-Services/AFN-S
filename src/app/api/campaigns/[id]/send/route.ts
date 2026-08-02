@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
+import {
+  buildUnsubscribeUrl,
+  nextFollowUpAfterSend,
+} from "@/lib/deliverability";
 import { ensureSalesSignature } from "@/lib/email-signature";
+import { validateOutboundEmailWithMx } from "@/lib/email-validate";
 import { isSalesMailConfigured, sendSalesEmail } from "@/lib/mail";
-import { isSyntheticEmail } from "@/lib/phone";
+import { getSendQuota } from "@/lib/send-quota";
 import { getServiceRoleClient } from "@/lib/supabase/service-role";
-import { buildOpenTrackingUrl } from "@/lib/tracking";
+import { buildClickTrackingUrl, buildOpenTrackingUrl } from "@/lib/tracking";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -47,6 +52,23 @@ export async function POST(
     );
   }
 
+  let quota;
+  try {
+    quota = await getSendQuota(supabase, user.id);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Quota check failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+  if (quota.remaining <= 0) {
+    return NextResponse.json(
+      {
+        error: `Daily send cap reached (${quota.sentToday}/${quota.cap}). Try again tomorrow or raise DAILY_SEND_CAP.`,
+        quota,
+      },
+      { status: 429 }
+    );
+  }
+
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns")
     .select("*")
@@ -67,7 +89,9 @@ export async function POST(
       generated_body,
       status,
       tracking_token,
-      companies ( email )
+      subject_variant,
+      follow_up_step,
+      companies ( email, do_not_email, name )
     `
     )
     .eq("campaign_id", campaignId)
@@ -85,16 +109,29 @@ export async function POST(
   const company = Array.isArray(target.companies)
     ? target.companies[0]
     : target.companies;
-  const recipientEmail = company?.email?.trim().toLowerCase() ?? "";
 
-  if (
-    !recipientEmail ||
-    isSyntheticEmail(recipientEmail) ||
-    !target.generated_subject ||
-    !target.generated_body
-  ) {
-    const message = !recipientEmail || isSyntheticEmail(recipientEmail)
-      ? "Missing real email (phone-only contact)"
+  if (company && (company as { do_not_email?: boolean }).do_not_email) {
+    const message = "Company unsubscribed / do-not-email";
+    await supabase
+      .from("campaign_targets")
+      .update({ status: "skipped", error_message: message })
+      .eq("id", target.id);
+    return NextResponse.json(
+      {
+        sent: 0,
+        failed: 0,
+        skipped: true,
+        error: message,
+        target: { id: target.id, status: "skipped" as const, error_message: message },
+      },
+      { status: 400 }
+    );
+  }
+
+  const validation = await validateOutboundEmailWithMx(company?.email);
+  if (!validation.ok || !target.generated_subject || !target.generated_body) {
+    const message = !validation.ok
+      ? validation.reason || "Invalid email"
       : "Missing draft content";
     await supabase
       .from("campaign_targets")
@@ -111,7 +148,8 @@ export async function POST(
     );
   }
 
-  // Ensure open-tracking token exists (migration backfill + new rows)
+  const recipientEmail = validation.email;
+
   let trackingToken = (target as { tracking_token?: string | null }).tracking_token;
   if (!trackingToken) {
     trackingToken = crypto.randomUUID();
@@ -128,15 +166,22 @@ export async function POST(
       subject: target.generated_subject,
       body: bodyWithSignature,
       openTrackingUrl: buildOpenTrackingUrl(trackingToken),
+      freightClickUrl: buildClickTrackingUrl(trackingToken),
+      unsubscribeUrl: buildUnsubscribeUrl(trackingToken),
     });
+
+    const now = new Date();
+    const follow = nextFollowUpAfterSend(0, now);
 
     await supabase
       .from("campaign_targets")
       .update({
         status: "sent",
-        sent_at: new Date().toISOString(),
+        sent_at: now.toISOString(),
         error_message: null,
         tracking_token: trackingToken,
+        follow_up_step: follow.follow_up_step,
+        next_follow_up_at: follow.next_follow_up_at,
       })
       .eq("id", target.id);
 
@@ -163,6 +208,11 @@ export async function POST(
     return NextResponse.json({
       sent: 1,
       failed: 0,
+      quota: {
+        ...quota,
+        sentToday: quota.sentToday + 1,
+        remaining: Math.max(0, quota.remaining - 1),
+      },
       target: { id: target.id, status: "sent" as const },
     });
   } catch (err) {

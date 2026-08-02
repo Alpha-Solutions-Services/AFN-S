@@ -11,7 +11,7 @@ export type CompanyStage =
 
 export type CampaignStatus = "draft" | "sending" | "completed" | "paused";
 
-export type TargetStatus = "pending" | "sent" | "failed" | "skipped";
+export type TargetStatus = "pending" | "sent" | "failed" | "skipped" | "bounced";
 
 export type CallOutcome =
   | "no_answer"
@@ -36,6 +36,8 @@ export interface Company {
   notes: string | null;
   extra: Record<string, unknown>;
   stage: CompanyStage;
+  do_not_email?: boolean;
+  unsubscribed_at?: string | null;
   last_called_at: string | null;
   next_call_at: string | null;
   call_attempts: number;
@@ -67,13 +69,18 @@ export interface CampaignTarget {
   opened_at?: string | null;
   open_count?: number;
   replied_at?: string | null;
+  bounced_at?: string | null;
+  follow_up_step?: number;
+  next_follow_up_at?: string | null;
+  subject_variant?: string | null;
+  click_count?: number;
   last_event_at?: string | null;
   created_at: string;
   updated_at: string;
   companies?: Pick<
     Company,
     "name" | "email" | "industry" | "contact_name" | "contact_title" | "website" | "notes"
-  >;
+  > & { do_not_email?: boolean };
 }
 
 export interface EmailLog {

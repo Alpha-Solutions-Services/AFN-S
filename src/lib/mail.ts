@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer";
 import {
   SALES_CC,
   SALES_REPLY_TO,
@@ -6,6 +7,7 @@ import {
   buildSalesEmailHtml,
   ensureSalesSignature,
 } from "@/lib/email-signature";
+import { appendToGmailSent } from "@/lib/imap-replies";
 import { isSyntheticEmail } from "@/lib/phone";
 
 const DEFAULT_FROM = "sales.afn.alpha@gmail.com";
@@ -52,6 +54,8 @@ export async function sendSalesEmail(opts: {
   subject: string;
   body: string;
   openTrackingUrl?: string;
+  freightClickUrl?: string;
+  unsubscribeUrl?: string;
 }): Promise<{ messageId: string }> {
   const to = opts.to.trim().toLowerCase();
   if (!to || isSyntheticEmail(to)) {
@@ -66,9 +70,33 @@ export async function sendSalesEmail(opts: {
   const replyTo = getSalesReplyTo();
   const cc = getSalesCc();
   const text = ensureSalesSignature(opts.body);
+  const stopLine = opts.unsubscribeUrl
+    ? `\n\nTo stop email from Alpha Freight Network: ${opts.unsubscribeUrl}`
+    : "";
   const html = buildSalesEmailHtml(text, {
     openTrackingUrl: opts.openTrackingUrl,
+    freightClickUrl: opts.freightClickUrl,
+    unsubscribeUrl: opts.unsubscribeUrl,
   });
+
+  const headers: Record<string, string> = {
+    "X-Mailer": "Alpha Sales Point",
+  };
+  if (opts.unsubscribeUrl) {
+    headers["List-Unsubscribe"] = `<${opts.unsubscribeUrl}>`;
+    headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+  }
+
+  const mailFields = {
+    from: `"${fromName}" <${from}>`,
+    replyTo,
+    to,
+    cc: cc && cc !== to ? cc : undefined,
+    subject: opts.subject,
+    text: text + stopLine,
+    html,
+    headers,
+  };
 
   const transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
@@ -77,20 +105,23 @@ export async function sendSalesEmail(opts: {
     auth,
   });
 
-  const info = await transporter.sendMail({
-    from: `"${fromName}" <${from}>`,
-    replyTo,
-    to,
-    cc: cc && cc !== to ? cc : undefined,
-    subject: opts.subject,
-    text,
-    html,
-    headers: {
-      "X-Mailer": "Alpha Sales Point",
-    },
-  });
+  const info = await transporter.sendMail(mailFields);
+  const messageId = info.messageId || `smtp-${Date.now()}`;
 
-  return { messageId: info.messageId || `smtp-${Date.now()}` };
+  try {
+    const raw = await new MailComposer({
+      ...mailFields,
+      messageId,
+      date: new Date(),
+    })
+      .compile()
+      .build();
+    await appendToGmailSent(raw);
+  } catch {
+    // Delivered via SMTP — don't fail the send if Sent-folder append fails
+  }
+
+  return { messageId };
 }
 
 export function sleep(ms: number): Promise<void> {

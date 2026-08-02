@@ -14,6 +14,7 @@ const TARGET_STATUS_COLORS: Record<CampaignTarget["status"], string> = {
   sent: "text-success border-success/40",
   failed: "text-danger border-danger/40",
   skipped: "text-warning border-warning/40",
+  bounced: "text-danger border-danger/40",
 };
 
 const PAGE_SIZE = 50;
@@ -49,11 +50,16 @@ export default function CampaignDetailPage({
     pending: 0,
     sent: 0,
     failed: 0,
+    bounced: 0,
     withDraft: 0,
     readyToSend: 0,
     opened: 0,
     replied: 0,
+    followUpsDue: 0,
   });
+  const [abStats, setAbStats] = useState<
+    Array<{ variant: string; sent: number; opened: number; openRate: number }>
+  >([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -71,6 +77,14 @@ export default function CampaignDetailPage({
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [batchSize, setBatchSize] = useState<number | "all">(25);
   const [deleting, setDeleting] = useState(false);
+  const [syncingReplies, setSyncingReplies] = useState(false);
+  const [sendingFollowUps, setSendingFollowUps] = useState(false);
+  const [quota, setQuota] = useState<{
+    cap: number;
+    sentToday: number;
+    remaining: number;
+    warmupDay: number | null;
+  } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,6 +106,7 @@ export default function CampaignDetailPage({
         targets?: CampaignTarget[];
         total?: number;
         stats?: typeof stats;
+        abStats?: typeof abStats;
         error?: string;
       }>(res);
       if (!res.ok) throw new Error(data.error || "Failed to load campaign");
@@ -103,6 +118,7 @@ export default function CampaignDetailPage({
       setTargets(nextTargets);
       setTotal(data.total ?? 0);
       if (data.stats) setStats(data.stats);
+      if (data.abStats) setAbStats(data.abStats);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load");
     } finally {
@@ -133,6 +149,38 @@ export default function CampaignDetailPage({
       }
     })();
   }, []);
+
+  const loadQuota = useCallback(async () => {
+    try {
+      const res = await fetch("/api/emails/quota");
+      const data = await readJsonResponse<{
+        cap?: number;
+        sentToday?: number;
+        remaining?: number;
+        warmupDay?: number | null;
+        error?: string;
+      }>(res);
+      if (!res.ok) return;
+      if (
+        typeof data.cap === "number" &&
+        typeof data.sentToday === "number" &&
+        typeof data.remaining === "number"
+      ) {
+        setQuota({
+          cap: data.cap,
+          sentToday: data.sentToday,
+          remaining: data.remaining,
+          warmupDay: data.warmupDay ?? null,
+        });
+      }
+    } catch {
+      // ignore — send API still enforces
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadQuota();
+  }, [loadQuota]);
 
   async function generateOneTarget(targetId: string, variationIndex: number) {
     const res = await fetch(`/api/campaigns/${params.id}/generate`, {
@@ -190,8 +238,16 @@ export default function CampaignDetailPage({
       failed?: number;
       error?: string;
       skipped?: boolean;
+      quota?: {
+        cap: number;
+        sentToday: number;
+        remaining: number;
+        warmupDay: number | null;
+      };
       target?: { id: string; status: TargetStatus; error_message?: string };
     }>(res);
+
+    if (data.quota) setQuota(data.quota);
 
     if (data.skipped) return data;
 
@@ -227,7 +283,11 @@ export default function CampaignDetailPage({
     }
 
     if (!res.ok || (data.failed ?? 0) > 0) {
-      throw new Error(data.error || "Send failed");
+      const err = new Error(data.error || "Send failed") as Error & {
+        status?: number;
+      };
+      err.status = res.status;
+      throw err;
     }
     return data;
   }
@@ -299,12 +359,48 @@ export default function CampaignDetailPage({
       return;
     }
 
+    let liveQuota = quota;
+    try {
+      const qRes = await fetch("/api/emails/quota");
+      const qData = await readJsonResponse<{
+        cap?: number;
+        sentToday?: number;
+        remaining?: number;
+        warmupDay?: number | null;
+      }>(qRes);
+      if (
+        qRes.ok &&
+        typeof qData.cap === "number" &&
+        typeof qData.sentToday === "number" &&
+        typeof qData.remaining === "number"
+      ) {
+        liveQuota = {
+          cap: qData.cap,
+          sentToday: qData.sentToday,
+          remaining: qData.remaining,
+          warmupDay: qData.warmupDay ?? null,
+        };
+        setQuota(liveQuota);
+      }
+    } catch {
+      // send API still enforces
+    }
+
     const allReady = await fetchAllTargetIds("send");
+    const remaining = liveQuota?.remaining ?? Infinity;
+    const capped =
+      Number.isFinite(remaining) && remaining < allReady.length
+        ? allReady.slice(0, Math.max(0, remaining as number))
+        : allReady;
     const toSend =
-      limit === "all" ? allReady : allReady.slice(0, Math.max(1, limit));
+      limit === "all" ? capped : capped.slice(0, Math.max(1, limit));
 
     if (toSend.length === 0) {
-      setMessage("No drafts ready to send.");
+      setMessage(
+        remaining === 0
+          ? `Daily send cap reached (${liveQuota?.sentToday}/${liveQuota?.cap}).`
+          : "No drafts ready to send."
+      );
       return;
     }
 
@@ -315,13 +411,20 @@ export default function CampaignDetailPage({
 
     let sent = 0;
     let failed = 0;
+    let stoppedForQuota = false;
 
     try {
       for (let i = 0; i < toSend.length; i++) {
         try {
           await sendOneTarget(toSend[i]);
           sent++;
-        } catch {
+        } catch (err) {
+          const status = (err as { status?: number })?.status;
+          if (status === 429) {
+            stoppedForQuota = true;
+            setError(err instanceof Error ? err.message : "Daily cap reached");
+            break;
+          }
           failed++;
         }
         setProgress({ done: i + 1, total: toSend.length });
@@ -331,11 +434,13 @@ export default function CampaignDetailPage({
       }
       setMessage(
         `Batch done: ${sent} sent, ${failed} failed` +
+          (stoppedForQuota ? " (stopped at daily cap)" : "") +
           (limit !== "all" && allReady.length > toSend.length
             ? ` (${allReady.length - toSend.length} still waiting)`
             : "")
       );
       await loadCampaign();
+      await loadQuota();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Send failed");
     } finally {
@@ -399,6 +504,94 @@ export default function CampaignDetailPage({
     }
   }
 
+  async function handleSyncReplies() {
+    setSyncingReplies(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/emails/sync-replies", { method: "POST" });
+      const data = await readJsonResponse<{
+        scannedReplies?: number;
+        scannedBounces?: number;
+        matched?: number;
+        bounced?: number;
+        scanned?: number;
+        error?: string;
+      }>(res);
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      setMessage(
+        `Inbox sync: ${data.matched ?? 0} replies, ${data.bounced ?? 0} bounces` +
+          ` (scanned ${data.scannedReplies ?? data.scanned ?? 0} msgs / ${data.scannedBounces ?? 0} bounce notices).`
+      );
+      await loadCampaign();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sync replies failed");
+    } finally {
+      setSyncingReplies(false);
+    }
+  }
+
+  async function handleSendFollowUps() {
+    if (!health?.gmail) {
+      setError("Sales mailbox not configured.");
+      return;
+    }
+    setSendingFollowUps(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const listRes = await fetch(
+        `/api/emails/follow-ups?campaignId=${params.id}`
+      );
+      const listData = await readJsonResponse<{
+        targets?: Array<{ id: string }>;
+        error?: string;
+      }>(listRes);
+      if (!listRes.ok) throw new Error(listData.error || "Failed to load follow-ups");
+      const due = listData.targets ?? [];
+      if (due.length === 0) {
+        setMessage("No due follow-ups (opened + unreplied + day 3/7).");
+        return;
+      }
+
+      let sent = 0;
+      let failed = 0;
+      for (const t of due) {
+        try {
+          const res = await fetch("/api/emails/follow-ups", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ targetId: t.id }),
+          });
+          const data = await readJsonResponse<{
+            sent?: number;
+            error?: string;
+            quota?: typeof quota;
+          }>(res);
+          if (data.quota) setQuota(data.quota);
+          if (!res.ok) {
+            if (res.status === 429) {
+              setError(data.error || "Daily cap reached");
+              break;
+            }
+            failed++;
+          } else {
+            sent += data.sent ?? 1;
+          }
+        } catch {
+          failed++;
+        }
+      }
+      setMessage(`Follow-ups: ${sent} sent, ${failed} failed (${due.length} due).`);
+      await loadCampaign();
+      await loadQuota();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Follow-up send failed");
+    } finally {
+      setSendingFollowUps(false);
+    }
+  }
+
   async function handleDeleteCampaign() {
     if (
       !window.confirm(
@@ -423,7 +616,9 @@ export default function CampaignDetailPage({
   }
 
   const isRunning = automationPhase !== "idle";
-  const canSend = readyToSend > 0 && !isRunning && Boolean(health?.gmail);
+  const quotaBlocks = Boolean(quota && quota.remaining <= 0);
+  const canSend =
+    readyToSend > 0 && !isRunning && Boolean(health?.gmail) && !quotaBlocks;
 
   if (loading && !campaign) {
     return (
@@ -478,7 +673,7 @@ export default function CampaignDetailPage({
         </div>
       ) : health?.gmail ? (
         <p className="mb-4 font-mono text-xs text-muted">
-          Sending as Muhammad Mikran via sales.afn.alpha@gmail.com · CC
+          Sending as Alpha Freight Network via sales.afn.alpha@gmail.com · CC
           kevin.afn.dispatch@gmail.com · replies to mikran.dispatch@gmail.com
         </p>
       ) : null}
@@ -494,14 +689,39 @@ export default function CampaignDetailPage({
           {campaign.offer_description}
         </p>
 
-        <div className="mt-4 grid gap-2 font-mono text-xs text-muted sm:grid-cols-3 lg:grid-cols-6">
+        <div className="mt-4 grid gap-2 font-mono text-xs text-muted sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
           <span>{stats.total.toLocaleString()} targets</span>
           <span>{stats.withDraft.toLocaleString()} drafts</span>
           <span>{readyToSend.toLocaleString()} ready</span>
           <span>{stats.sent.toLocaleString()} sent</span>
           <span>{(stats.opened ?? 0).toLocaleString()} opened</span>
           <span>{(stats.replied ?? 0).toLocaleString()} replied</span>
+          <span>{(stats.bounced ?? 0).toLocaleString()} bounced</span>
+          <span>{(stats.followUpsDue ?? 0).toLocaleString()} follow-ups due</span>
         </div>
+
+        {abStats.length > 0 ? (
+          <p className="mt-3 font-mono text-xs text-muted">
+            Subject A/B:{" "}
+            {abStats
+              .map(
+                (v) =>
+                  `${v.variant} ${v.openRate}% open (${v.opened}/${v.sent})`
+              )
+              .join(" · ")}
+          </p>
+        ) : null}
+
+        {quota ? (
+          <p className="mt-3 font-mono text-xs text-muted">
+            Daily send quota: {quota.sentToday}/{quota.cap} used ·{" "}
+            {quota.remaining} left
+            {quota.warmupDay != null ? ` · warm-up day ${quota.warmupDay}` : ""}
+            {!quota.warmupDay
+              ? " · set SEND_WARMUP_START in Vercel to ramp safely"
+              : ""}
+          </p>
+        ) : null}
 
         <div className="mt-5 flex flex-wrap items-end gap-3">
           <button
@@ -513,6 +733,32 @@ export default function CampaignDetailPage({
             {automationPhase === "generating"
               ? "Generating..."
               : "Generate drafts"}
+          </button>
+
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={isRunning || syncingReplies || !health?.gmail}
+            onClick={() => void handleSyncReplies()}
+          >
+            {syncingReplies ? "Syncing..." : "Sync inbox"}
+          </button>
+
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={
+              isRunning ||
+              sendingFollowUps ||
+              !health?.gmail ||
+              (stats.followUpsDue ?? 0) <= 0 ||
+              quotaBlocks
+            }
+            onClick={() => void handleSendFollowUps()}
+          >
+            {sendingFollowUps
+              ? "Sending follow-ups..."
+              : `Send follow-ups (${stats.followUpsDue ?? 0})`}
           </button>
 
           <div>
@@ -545,8 +791,8 @@ export default function CampaignDetailPage({
           </button>
         </div>
         <p className="mt-3 text-xs text-muted">
-          Drafts stay until you send. Use batch size to send 10 / 25 / 50 / 100
-          at a time, or all ready. Each row also has its own Send button.
+          Sync inbox pulls replies + Mailer-Daemon bounces. Follow-ups only go to
+          opened, unreplied contacts on day 3 / day 7. Emails include a stop link.
         </p>
       </div>
 
@@ -639,6 +885,26 @@ export default function CampaignDetailPage({
                   {target.replied_at ? (
                     <span className="rounded border border-success/40 px-2 py-0.5 font-mono text-xs uppercase text-success">
                       replied
+                    </span>
+                  ) : null}
+                  {target.bounced_at || target.status === "bounced" ? (
+                    <span className="rounded border border-danger/40 px-2 py-0.5 font-mono text-xs uppercase text-danger">
+                      bounced
+                    </span>
+                  ) : null}
+                  {target.subject_variant ? (
+                    <span className="rounded border border-border px-2 py-0.5 font-mono text-xs uppercase text-muted">
+                      subj {target.subject_variant}
+                    </span>
+                  ) : null}
+                  {(target.click_count ?? 0) > 0 ? (
+                    <span className="rounded border border-accent/40 px-2 py-0.5 font-mono text-xs uppercase text-accent">
+                      clicked ×{target.click_count}
+                    </span>
+                  ) : null}
+                  {target.companies?.do_not_email ? (
+                    <span className="rounded border border-warning/40 px-2 py-0.5 font-mono text-xs uppercase text-warning">
+                      unsubscribed
                     </span>
                   ) : null}
                   {canSendTarget(target) ? (

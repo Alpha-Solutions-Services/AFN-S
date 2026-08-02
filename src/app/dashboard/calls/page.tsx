@@ -30,6 +30,7 @@ export default function CallQueuePage() {
   const [callbackAt, setCallbackAt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [focus, setFocus] = useState<"all" | "opened_unreplied">("all");
   const [lastInterestedId, setLastInterestedId] = useState<string | null>(null);
   const [lastInterestedName, setLastInterestedName] = useState<string | null>(
     null
@@ -39,7 +40,9 @@ export default function CallQueuePage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/calls/queue?limit=50");
+      const focusParam =
+        focus === "opened_unreplied" ? "&focus=opened_unreplied" : "";
+      const res = await fetch(`/api/calls/queue?limit=50${focusParam}`);
       const data = await readJsonResponse<{
         companies?: Company[];
         error?: string;
@@ -54,7 +57,7 @@ export default function CallQueuePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [focus]);
 
   useEffect(() => {
     void loadQueue();
@@ -159,14 +162,40 @@ export default function CallQueuePage() {
           your phone, or <span className="font-mono text-xs">Open in Google
           Voice</span> if Voice is on another Google account / Chrome profile.
         </p>
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={() => void loadQueue()}
-          disabled={loading}
-        >
-          Refresh queue
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={cn(
+              "rounded-lg border px-3 py-1.5 font-mono text-xs uppercase",
+              focus === "all"
+                ? "border-accent text-accent"
+                : "border-border text-muted hover:text-text"
+            )}
+            onClick={() => setFocus("all")}
+          >
+            All due
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "rounded-lg border px-3 py-1.5 font-mono text-xs uppercase",
+              focus === "opened_unreplied"
+                ? "border-accent text-accent"
+                : "border-border text-muted hover:text-text"
+            )}
+            onClick={() => setFocus("opened_unreplied")}
+          >
+            Opened, no reply
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => void loadQueue()}
+            disabled={loading}
+          >
+            Refresh queue
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -206,7 +235,9 @@ export default function CallQueuePage() {
         <div className="panel p-8 text-center">
           <p className="text-sm text-text">Queue is empty</p>
           <p className="mt-2 text-sm text-muted">
-            Import carriers with phone numbers, or wait until callbacks are due.
+            {focus === "opened_unreplied"
+              ? "No carriers with opened emails waiting for a reply call-back."
+              : "Import carriers with phone numbers, or wait until callbacks are due."}
           </p>
           <Link href="/dashboard/companies" className="btn-primary mt-6 inline-flex">
             Go to Companies

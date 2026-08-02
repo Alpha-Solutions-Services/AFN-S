@@ -25,6 +25,7 @@ function extractJson(text: string): EmailDraft {
 
 function stripAiSignature(body: string): string {
   const cutMarkers = [
+    /\n[-–—]\s*\nAlpha Freight Network[\s\S]*$/i,
     /\n[-–—]\s*\nMuhammad Mikran[\s\S]*$/i,
     /\nBest regards,[\s\S]*$/i,
     /\nRegards,[\s\S]*$/i,
@@ -108,20 +109,22 @@ Canonical Alpha Freight pitch (always true — weave 1–2 of these into the ope
 Subject line rules (critical for deliverability):
 - 4–8 words, Title Case or sentence case — never ALL CAPS
 - No exclamation marks, no emoji, no "$", no "FREE", "guaranteed", "urgent", "act now", "limited time"
-- Sound like a normal business email subject
+- Do NOT use "Higher Rates", "Make More Money", or company-name-in-subject spam patterns
+- Sound like a normal business email subject (e.g. "Dispatch support for your lanes")
 - Do not start with "Re:" or "Fwd:"
 
 Body rules (critical for deliverability):
 - Write ONLY a short personalized opener: 2–3 short paragraphs, 70–110 words total
 - The system appends the full structured pitch, Google Voice CTA, and signature — do NOT write those yourself
 - Do NOT write any phone number, fee table, bullet list, or website URL in the opener
-- NEVER invent phone numbers, emails, websites, or rates not listed above
+- NEVER invent phone numbers, emails, websites, per-mile rates, or $ amounts not listed above
+- Do NOT invent "$X per mile" / box-truck rate promises — only our 8%/6% dispatch fee is allowed
 - Plain text only — no HTML, no markdown
 - ${styleHint}
 - Personalize with one real detail from the company data above
 - End with one soft line inviting a reply (system adds call CTA)
 - Avoid spam triggers and corporate fluff
-- Sound like Muhammad Mikran (dispatch manager) — peer to peer
+- Sound like Alpha Freight Network dispatch — peer to peer, calm
 - The company Phone field is THEIR number — never use it as our CTA
 
 Respond with ONLY raw JSON, no markdown fences:

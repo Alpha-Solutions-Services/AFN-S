@@ -5,6 +5,7 @@ import {
   isRateLimitError,
   parseRetrySeconds,
 } from "@/lib/ai-email";
+import { assignSubjectVariant } from "@/lib/deliverability";
 import { sleep } from "@/lib/mail";
 
 export const runtime = "nodejs";
@@ -100,11 +101,16 @@ export async function POST(
       });
     }
 
+    const subjectVariant = assignSubjectVariant(
+      `${target.id}:${variationIndex}`
+    );
+
     const { error: updateError } = await supabase
       .from("campaign_targets")
       .update({
         generated_subject: draft.subject,
         generated_body: draft.body,
+        subject_variant: subjectVariant,
         error_message: null,
       })
       .eq("id", target.id);
@@ -120,6 +126,7 @@ export async function POST(
         id: target.id,
         generated_subject: draft.subject,
         generated_body: draft.body,
+        subject_variant: subjectVariant,
         error_message: null,
       },
     });

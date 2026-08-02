@@ -4,7 +4,7 @@
  */
 export const GOOGLE_VOICE_NUMBER = "8593635897";
 export const GOOGLE_VOICE_DISPLAY = "(859) 363-5897";
-export const SALES_SENDER_NAME = "Muhammad Mikran";
+export const SALES_SENDER_NAME = "Alpha Freight Network";
 export const SALES_REPLY_TO = "mikran.dispatch@gmail.com";
 export const SALES_CC = "kevin.afn.dispatch@gmail.com";
 export const SALES_FREIGHT_URL = "https://www.alphasolutions.software/freight";
@@ -48,13 +48,10 @@ export const SALES_CTA_BLOCK = [
 export const SALES_EMAIL_SIGNATURE = [
   "",
   "—",
-  "Muhammad Mikran",
-  "Dispatch Manager | Freight Operations BDE",
+  "Alpha Freight Network",
+  "Dispatch · Carrier Relations | Alpha Solutions",
   SALES_REPLY_TO,
   `Google Voice (call/text): ${GOOGLE_VOICE_DISPLAY}`,
-  "",
-  "Also: Website Developer · AI Automation Expert · Business Development Expert",
-  "Owner · Alpha Solutions",
   `Dispatching with precision · Building with purpose · ${SALES_FREIGHT_URL}`,
 ].join("\n");
 
@@ -75,12 +72,23 @@ export function scrubInventedPhoneNumbers(text: string): string {
     .trim();
 }
 
+/** Strip invented per-mile / dollar promises AI sometimes hallucinates. */
+export function scrubInventedRateClaims(text: string): string {
+  return text
+    .replace(/\$\s?\d+(?:\.\d+)?\s*\+?\s*(?:per\s*)?(?:\/\s*)?mile[s]?/gi, "")
+    .replace(/\d+(?:\.\d+)?\s*\+\s*(?:per\s*)?mile[s]?/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ ?\n ?/g, "\n")
+    .trim();
+}
+
 /**
  * Finalize outbound body:
- * AI opener → full pitch block → Google Voice CTA → Mikran signature
+ * AI opener → full pitch block → Google Voice CTA → AFN signature
  */
 export function ensureSalesSignature(body: string): string {
   let trimmed = scrubInventedPhoneNumbers(body.trimEnd());
+  trimmed = scrubInventedRateClaims(trimmed);
   trimmed = trimmed
     .replace(/\n?(Give us a quick call|call us|Call us)[^\n]*$/i, "")
     .trimEnd();
@@ -111,6 +119,8 @@ export function bodyWithoutSignature(body: string): string {
     "\n— What we offer —",
     "\n- What we offer -",
     "\nReady to talk?",
+    "\n—\nAlpha Freight Network",
+    "\n-\nAlpha Freight Network",
     "\n—\nMuhammad Mikran",
     "\n-\nMuhammad Mikran",
   ];
@@ -123,7 +133,11 @@ export function bodyWithoutSignature(body: string): string {
 
 export function buildSalesEmailHtml(
   plainBodyWithSignature: string,
-  opts?: { openTrackingUrl?: string }
+  opts?: {
+    openTrackingUrl?: string;
+    freightClickUrl?: string;
+    unsubscribeUrl?: string;
+  }
 ): string {
   const opener = bodyWithoutSignature(plainBodyWithSignature);
   const openerHtml = opener
@@ -136,8 +150,18 @@ export function buildSalesEmailHtml(
     )
     .join("");
 
+  const freightHref = escapeHtml(opts?.freightClickUrl || SALES_FREIGHT_URL);
+
   const trackingPixel = opts?.openTrackingUrl
     ? `<img src="${escapeHtml(opts.openTrackingUrl)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;" />`
+    : "";
+
+  const stopBlock = opts?.unsubscribeUrl
+    ? `<div style="margin-top:20px;padding-top:14px;border-top:1px solid #e8eaed;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.45;color:#80868b;">
+        Alpha Freight Network outreach for carriers.
+        If this isn't relevant,
+        <a href="${escapeHtml(opts.unsubscribeUrl)}" style="color:#5f6368;">stop emailing this address</a>.
+      </div>`
     : "";
 
   return `<!DOCTYPE html>
@@ -163,7 +187,7 @@ export function buildSalesEmailHtml(
           <p style="margin:0 0 8px 0;">${escapeHtml(ALPHA_FREIGHT_PITCH.services)}</p>
           <p style="margin:0 0 8px 0;">${escapeHtml(ALPHA_FREIGHT_PITCH.howItWorks)}</p>
           <p style="margin:0;">
-            <a href="${SALES_FREIGHT_URL}" style="color:#1a73e8;text-decoration:none;font-weight:600;">View Alpha Freight →</a>
+            <a href="${freightHref}" style="color:#1a73e8;text-decoration:none;font-weight:600;">View Alpha Freight →</a>
           </p>
         </div>
       </div>
@@ -182,8 +206,8 @@ export function buildSalesEmailHtml(
       </div>
 
       <div style="margin-top:24px;padding-top:16px;border-top:1px solid #dadce0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.45;color:#202124;">
-        <div style="font-size:15px;font-weight:700;color:#1a73e8;">Muhammad Mikran</div>
-        <div style="color:#5f6368;">Dispatch Manager | Freight Operations BDE</div>
+        <div style="font-size:15px;font-weight:700;color:#1a73e8;">Alpha Freight Network</div>
+        <div style="color:#5f6368;">Dispatch · Carrier Relations | Alpha Solutions</div>
         <div style="margin-top:8px;">
           <a href="mailto:${SALES_REPLY_TO}" style="color:#1a73e8;text-decoration:none;">${SALES_REPLY_TO}</a>
         </div>
@@ -191,15 +215,12 @@ export function buildSalesEmailHtml(
           Google Voice (call/text):
           <a href="tel:+1${GOOGLE_VOICE_NUMBER}" style="color:#1a73e8;text-decoration:none;">${GOOGLE_VOICE_DISPLAY}</a>
         </div>
-        <div style="margin-top:12px;color:#5f6368;font-size:12px;">
-          Also: Website Developer · AI Automation Expert · Business Development Expert
-        </div>
-        <div style="margin-top:4px;font-weight:600;color:#202124;">Owner · Alpha Solutions</div>
-        <div style="margin-top:4px;color:#5f6368;font-size:12px;font-style:italic;">
+        <div style="margin-top:10px;color:#5f6368;font-size:12px;font-style:italic;">
           Dispatching with precision · Building with purpose ·
-          <a href="${SALES_FREIGHT_URL}" style="color:#1a73e8;text-decoration:none;">alphasolutions.software/freight</a>
+          <a href="${freightHref}" style="color:#1a73e8;text-decoration:none;">alphasolutions.software/freight</a>
         </div>
       </div>
+      ${stopBlock}
       ${trackingPixel}
     </div>
   </div>
