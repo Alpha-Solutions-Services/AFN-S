@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
+import { useUi } from "@/components/ui/UiProvider";
 import { GENERATION_DELAY_MS } from "@/lib/ai-email";
 import { readJsonResponse } from "@/lib/fetch-json";
 import { sendDelayWithJitter, cn } from "@/lib/utils";
@@ -42,6 +43,7 @@ export default function CampaignDetailPage({
 }: {
   params: { id: string };
 }) {
+  const ui = useUi();
   const router = useRouter();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [targets, setTargets] = useState<CampaignTarget[]>([]);
@@ -593,13 +595,13 @@ export default function CampaignDetailPage({
   }
 
   async function handleDeleteCampaign() {
-    if (
-      !window.confirm(
-        `Delete campaign "${campaign?.name}"? This removes all drafts and targets. Sent email logs stay.`
-      )
-    ) {
-      return;
-    }
+    const ok = await ui.confirm({
+      title: "Delete campaign?",
+      message: `Delete campaign “${campaign?.name}”? This removes all drafts and targets. Sent email logs stay.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
 
     setDeleting(true);
     setError(null);

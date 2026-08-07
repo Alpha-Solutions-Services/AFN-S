@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
+import { useUi } from "@/components/ui/UiProvider";
 import { readJsonResponse } from "@/lib/fetch-json";
 import { DEFAULT_CAMPAIGN_OFFER } from "@/lib/talk-track";
 import type { Campaign } from "@/lib/types";
@@ -17,6 +18,7 @@ const STATUS_COLORS: Record<Campaign["status"], string> = {
 };
 
 function CampaignsForm() {
+  const ui = useUi();
   const router = useRouter();
   const searchParams = useSearchParams();
   const companyId = searchParams.get("companyId");
@@ -56,7 +58,13 @@ function CampaignsForm() {
   }, [loadCampaigns]);
 
   async function handleDelete(id: string, name: string) {
-    if (!window.confirm(`Delete campaign "${name}"?`)) return;
+    const ok = await ui.confirm({
+      title: "Delete campaign?",
+      message: `Delete campaign “${name}”?`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     setDeletingId(id);
     setError(null);
     try {
