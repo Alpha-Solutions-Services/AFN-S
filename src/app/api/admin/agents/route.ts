@@ -107,11 +107,25 @@ export async function POST(request: Request) {
   }
 
   if (!userId) {
-    const raw = createError?.message?.trim();
-    const message =
-      raw && raw !== "{}"
-        ? raw
-        : `Could not create ${email}. It may already exist, or the email format was rejected.`;
+    const authErr = createError as
+      | (Error & { status?: number; code?: string })
+      | null;
+    console.error("admin.createUser failed", email, {
+      name: authErr?.name,
+      status: authErr?.status,
+      code: authErr?.code,
+      message: authErr?.message,
+    });
+    const raw = authErr?.message?.trim();
+    const meta = [
+      authErr?.status ? `status ${authErr.status}` : null,
+      authErr?.code ? `code ${authErr.code}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const base =
+      raw && raw !== "{}" ? raw : `Could not create ${email}`;
+    const message = meta ? `${base} (${meta})` : base;
     return NextResponse.json({ error: message }, { status: 400 });
   }
 
