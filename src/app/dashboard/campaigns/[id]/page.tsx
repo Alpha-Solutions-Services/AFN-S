@@ -22,6 +22,12 @@ const TARGET_STATUS_COLORS: Record<CampaignTarget["status"], string> = {
 const PAGE_SIZE = 50;
 const BATCH_SIZES = [10, 25, 50, 100] as const;
 
+function mailboxLabel(email?: string | null): string {
+  if (!email) return "";
+  const t = SALES_TEAMS.find((x) => x.email === email);
+  return t ? `${t.name} · ${email}` : email;
+}
+
 type StatusFilter = "all" | TargetStatus | "ready";
 
 function needsDraft(target: CampaignTarget) {
@@ -696,12 +702,19 @@ export default function CampaignDetailPage({
             : ""}
           {health.ai === "none" ? "Add GROQ_API_KEY to environment variables. " : ""}
         </div>
-      ) : health?.gmail ? (
+      ) : (
         <p className="mb-4 font-mono text-xs text-muted">
-          Sending as Alpha Freight Network via sales.afn.alpha@gmail.com · CC
-          kevin.afn.dispatch@gmail.com · replies to mikran.dispatch@gmail.com
+          {(() => {
+            const t = SALES_TEAMS.find(
+              (x) => x.key === (campaign as { team?: string | null }).team
+            );
+            const sender = t
+              ? `${t.name} (${t.email})`
+              : "round-robin across the 10 Forces";
+            return `Sending as Alpha Freight Network — ${sender} · CC sales.afn.alpha@gmail.com · replies to mikran.dispatch@gmail.com`;
+          })()}
         </p>
-      ) : null}
+      )}
 
       <div className="panel mb-6 p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -912,6 +925,11 @@ export default function CampaignDetailPage({
                   <p className="mt-0.5 font-mono text-xs text-muted">
                     {target.companies?.email}
                   </p>
+                  {target.sent_mailbox ? (
+                    <p className="mt-0.5 font-mono text-[11px] text-muted">
+                      sent via {mailboxLabel(target.sent_mailbox)}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span

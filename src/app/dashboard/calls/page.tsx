@@ -33,6 +33,8 @@ export default function CallQueuePage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [focus, setFocus] = useState<"all" | "opened_unreplied">("all");
+  const [gvAccount, setGvAccount] = useState("0");
+  const [copied, setCopied] = useState(false);
   const [lastInterestedId, setLastInterestedId] = useState<string | null>(null);
   const [lastInterestedName, setLastInterestedName] = useState<string | null>(
     null
@@ -64,6 +66,42 @@ export default function CallQueuePage() {
   useEffect(() => {
     void loadQueue();
   }, [loadQueue]);
+
+  useEffect(() => {
+    const envDefault = process.env.NEXT_PUBLIC_GOOGLE_VOICE_ACCOUNT || "0";
+    try {
+      setGvAccount(localStorage.getItem("afn_gv_account") ?? envDefault);
+    } catch {
+      setGvAccount(envDefault);
+    }
+  }, []);
+
+  function updateGvAccount(v: string) {
+    setGvAccount(v);
+    try {
+      localStorage.setItem("afn_gv_account", v);
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  function openInGoogleVoice(e164: string) {
+    const url = `https://voice.google.com/u/${gvAccount}/calls?a=nc,${encodeURIComponent(
+      e164
+    )}`;
+    // Named target reuses one Google Voice tab instead of opening many
+    window.open(url, "afn_google_voice");
+  }
+
+  async function copyNumber(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Could not copy — copy the number manually.");
+    }
+  }
 
   const current = queue[index] ?? null;
   const phone = useMemo(
@@ -319,31 +357,54 @@ export default function CallQueuePage() {
 
             <div className="mt-8">
               {phone ? (
-                <div className="mt-8 flex flex-wrap gap-3">
-                  <a
-                    href={phone.telHref}
-                    className="btn-primary inline-flex min-h-[52px] min-w-[140px] text-base"
-                  >
-                    Call {phone.display}
-                  </a>
-                  <a
-                    href={`https://voice.google.com/u/${process.env.NEXT_PUBLIC_GOOGLE_VOICE_ACCOUNT || "0"}/calls?a=nc,${encodeURIComponent(phone.e164)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn-secondary inline-flex min-h-[52px] text-base"
-                  >
-                    Open in Google Voice
-                  </a>
-                </div>
+                  <div className="mt-8 flex flex-wrap items-center gap-3">
+                    <a
+                      href={phone.telHref}
+                      className="btn-primary inline-flex min-h-[52px] min-w-[140px] text-base"
+                    >
+                      Call {phone.display}
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => openInGoogleVoice(phone.e164)}
+                      className="btn-secondary inline-flex min-h-[52px] text-base"
+                    >
+                      Dial in Google Voice
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copyNumber(phone.e164)}
+                      className="btn-secondary inline-flex min-h-[52px]"
+                    >
+                      {copied ? "Copied ✓" : "Copy number"}
+                    </button>
+                    <label className="flex items-center gap-2 text-xs text-muted">
+                      Voice account
+                      <select
+                        className="input w-auto py-1"
+                        value={gvAccount}
+                        onChange={(e) => updateGvAccount(e.target.value)}
+                      >
+                        <option value="0">u/0</option>
+                        <option value="1">u/1</option>
+                        <option value="2">u/2</option>
+                      </select>
+                    </label>
+                  </div>
               ) : (
                 <p className="mt-8 font-mono text-xs text-danger">
                   Phone number could not be normalized for dialing.
                 </p>
               )}
               <p className="mt-3 text-xs text-muted">
-                Tip: keep Google Voice logged in on a second Chrome profile/window.
-                Set NEXT_PUBLIC_GOOGLE_VOICE_ACCOUNT to 0, 1, or 2 to match
-                voice.google.com/u/N/…
+                For live assist, run this CRM and Google Voice in the{" "}
+                <span className="text-text">same Chrome profile</span> and set
+                Voice account to match your URL (yours is{" "}
+                <span className="font-mono">voice.google.com/u/0</span> →{" "}
+                <span className="font-mono">u/0</span>). Put the call on
+                speakerphone so the mic hears both sides. Different profile? Use{" "}
+                <span className="text-text">Copy number</span> and paste into
+                Voice.
               </p>
             </div>
 
