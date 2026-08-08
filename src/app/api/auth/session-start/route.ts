@@ -35,7 +35,10 @@ export async function POST(request: Request) {
 
   const { allowed, configured } = await isIpAllowed(admin, ip);
 
-  if (configured && !allowed) {
+  // Managers can sign in from anywhere; only agents/team leads are IP-gated.
+  const isManager = profile?.role === "manager";
+
+  if (configured && !allowed && !isManager) {
     try {
       await admin.from("login_attempts").insert({
         user_id: user.id,
