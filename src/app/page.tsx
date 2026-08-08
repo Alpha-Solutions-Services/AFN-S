@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getSiteUrl } from "@/lib/site-url";
@@ -14,12 +14,43 @@ const OAUTH_ERRORS: Record<string, string> = {
 };
 
 function LoginForm() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const urlError = searchParams.get("error");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(
     urlError ? OAUTH_ERRORS[urlError] ?? `Sign-in error: ${urlError}` : null
   );
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [pwLoading, setPwLoading] = useState(false);
+
+  async function signInWithPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setPwLoading(true);
+    setError(null);
+
+    const supabase = createClient();
+    if (!supabase) {
+      setError("Supabase is not configured. Check your environment variables.");
+      setPwLoading(false);
+      return;
+    }
+
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password,
+    });
+
+    if (authError) {
+      setError(authError.message || "Invalid email or password.");
+      setPwLoading(false);
+      return;
+    }
+
+    router.push("/dashboard");
+    router.refresh();
+  }
 
   async function signInWithGoogle() {
     setLoading(true);
@@ -57,11 +88,7 @@ function LoginForm() {
         </p>
         <h1 className="mt-2 text-2xl font-semibold text-text">Sales CRM</h1>
         <p className="mt-3 text-sm text-muted">
-          Sign in to manage carrier outreach. Campaigns send from{" "}
-          <span className="font-mono text-xs text-text">
-            sales.afn.alpha@gmail.com
-          </span>
-          .
+          Sales agents: sign in with the email and password your manager gave you.
         </p>
 
         {error ? (
@@ -70,11 +97,49 @@ function LoginForm() {
           </p>
         ) : null}
 
+        <form onSubmit={signInWithPassword} className="mt-6 space-y-3">
+          <div>
+            <label className="data-label mb-1 block">Email</label>
+            <input
+              className="input"
+              type="email"
+              autoComplete="username"
+              value={email}
+              onChange={(ev) => setEmail(ev.target.value)}
+              placeholder="sales.afn.patriot+1@gmail.com"
+              required
+            />
+          </div>
+          <div>
+            <label className="data-label mb-1 block">Password</label>
+            <input
+              className="input"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(ev) => setPassword(ev.target.value)}
+              placeholder="Your password"
+              required
+            />
+          </div>
+          <button type="submit" disabled={pwLoading} className="btn-primary w-full">
+            {pwLoading ? "Signing in..." : "Sign in"}
+          </button>
+        </form>
+
+        <div className="my-6 flex items-center gap-3">
+          <span className="h-px flex-1 bg-border" />
+          <span className="font-mono text-[10px] uppercase tracking-widest text-muted">
+            Managers & team leads
+          </span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+
         <button
           type="button"
           onClick={signInWithGoogle}
           disabled={loading}
-          className="btn-primary mt-6 w-full"
+          className="btn-secondary w-full"
         >
           {loading ? "Redirecting..." : "Continue with Google"}
         </button>
