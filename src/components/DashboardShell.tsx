@@ -37,6 +37,7 @@ export function DashboardShell({
   const router = useRouter();
   const [role, setRole] = useState<AppRole | null>(null);
   const [blocked, setBlocked] = useState<{ ip: string | null } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -140,7 +141,19 @@ export function DashboardShell({
 
   return (
     <div className="flex min-h-screen">
-      <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-panel">
+      {menuOpen ? (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          onClick={() => setMenuOpen(false)}
+          aria-hidden="true"
+        />
+      ) : null}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-56 shrink-0 flex-col border-r border-border bg-panel transition-transform md:static md:z-auto md:translate-x-0",
+          menuOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
         <div className="border-b border-border px-4 py-5">
           <p className="font-mono text-xs uppercase tracking-widest text-muted">
             Alpha Sales Point
@@ -161,6 +174,7 @@ export function DashboardShell({
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={() => setMenuOpen(false)}
                 className={cn(
                   "rounded-lg px-3 py-2 text-sm transition-colors",
                   active
@@ -183,12 +197,34 @@ export function DashboardShell({
           </button>
         </div>
       </aside>
-      <main className="flex flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-border px-8 py-5">
-          <h1 className="text-lg font-semibold text-text">{title}</h1>
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-6 lg:px-8 lg:py-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setMenuOpen(true)}
+              className="rounded-lg border border-border p-2 text-muted transition-colors hover:text-text md:hidden"
+              aria-label="Open menu"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              >
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+            <h1 className="truncate text-lg font-semibold text-text">{title}</h1>
+          </div>
           <NotificationsBell />
         </header>
-        <div className="flex-1 p-8">{children}</div>
+        <div className="flex-1 p-4 sm:p-6 lg:p-8">{children}</div>
       </main>
     </div>
   );

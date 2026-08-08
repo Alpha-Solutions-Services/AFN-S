@@ -91,14 +91,31 @@ export default function DashboardOverviewPage() {
                 </Link>
               </div>
               <div className="space-y-2">
-                {COMPANY_STAGES.map((stage) => (
-                  <div key={stage} className="flex items-center justify-between text-sm">
-                    <span className="text-muted">{STAGE_LABELS[stage]}</span>
-                    <span className="font-mono text-text">
-                      {(stats.byStage[stage] ?? 0).toLocaleString()}
-                    </span>
-                  </div>
-                ))}
+                {(() => {
+                  const maxStage = Math.max(
+                    1,
+                    ...COMPANY_STAGES.map((s) => stats.byStage[s] ?? 0)
+                  );
+                  return COMPANY_STAGES.map((stage) => {
+                    const count = stats.byStage[stage] ?? 0;
+                    return (
+                      <div key={stage} className="flex items-center gap-3 text-sm">
+                        <span className="w-28 shrink-0 truncate text-muted">
+                          {STAGE_LABELS[stage]}
+                        </span>
+                        <div className="h-3 flex-1 overflow-hidden rounded bg-bg">
+                          <div
+                            className="h-3 rounded bg-accent transition-all"
+                            style={{ width: `${Math.round((count / maxStage) * 100)}%` }}
+                          />
+                        </div>
+                        <span className="w-12 shrink-0 text-right font-mono text-text">
+                          {count.toLocaleString()}
+                        </span>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
 
