@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { parseExcelBuffer, type ParsedCompanyRow } from "@/lib/excel-import";
 import { IMPORT_BATCH_SIZE, dedupePayload, type UpsertCompanyRow } from "@/lib/import-batch";
+import { getProfile } from "@/lib/roles";
+import { getServiceRoleClient } from "@/lib/supabase/service-role";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -51,6 +53,16 @@ export async function POST(request: Request) {
   const auth = await requireUser();
   if ("error" in auth) return auth.error;
   const { supabase, user } = auth;
+
+  // Only sales managers may upload leads (agents/leads work the shared pool).
+  const admin = getServiceRoleClient();
+  const profile = admin ? await getProfile(admin, user.id) : null;
+  if (profile && profile.role !== "manager") {
+    return NextResponse.json(
+      { error: "Only sales managers can upload leads." },
+      { status: 403 }
+    );
+  }
 
   const contentType = request.headers.get("content-type") ?? "";
 

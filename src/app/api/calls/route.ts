@@ -1,13 +1,26 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { companyUpdateForOutcome } from "@/lib/call-outcomes";
+import { getProfile } from "@/lib/roles";
+import { getServiceRoleClient } from "@/lib/supabase/service-role";
 import type { CallOutcome } from "@/lib/types";
 import { CALL_OUTCOMES } from "@/lib/types";
+
+export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   const auth = await requireUser();
   if ("error" in auth) return auth.error;
-  const { supabase, user } = auth;
+  const { user } = auth;
+
+  const admin = getServiceRoleClient();
+  if (!admin) {
+    return NextResponse.json({ error: "Service role not configured" }, { status: 503 });
+  }
+  const profile = await getProfile(admin, user.id);
+  if (!profile || profile.active === false) {
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  }
 
   let body: {
     company_id?: string;
@@ -34,11 +47,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid outcome" }, { status: 400 });
   }
 
-  const { data: company, error: companyError } = await supabase
+  const { data: company, error: companyError } = await admin
     .from("companies")
     .select("id, call_attempts")
     .eq("id", companyId)
-    .eq("owner_id", user.id)
     .maybeSingle();
 
   if (companyError) {
@@ -53,11 +65,12 @@ export async function POST(request: Request) {
     nextCallAt: body.next_call_at ?? undefined,
   });
 
-  const { data: log, error: logError } = await supabase
+  const { data: log, error: logError } = await admin
     .from("call_logs")
     .insert({
       owner_id: user.id,
       company_id: companyId,
+      team: profile.team,
       outcome,
       notes: body.notes?.trim() || null,
       duration_seconds:
@@ -74,7 +87,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { data: updated, error: updateError } = await supabase
+  const { data: updated, error: updateError } = await admin
     .from("companies")
     .update({
       stage: updates.stage,
@@ -83,7 +96,6 @@ export async function POST(request: Request) {
       call_attempts: (company.call_attempts ?? 0) + 1,
     })
     .eq("id", companyId)
-    .eq("owner_id", user.id)
     .select("*")
     .single();
 

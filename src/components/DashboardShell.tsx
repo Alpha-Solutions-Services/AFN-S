@@ -13,6 +13,10 @@ type NavItem = { href: string; label: string; exact?: boolean };
 function navForRole(role: AppRole | null): NavItem[] {
   const isAgent = role === "agent";
   const isManagerOrLead = !role || role === "manager" || role === "team_lead";
+  // Sales agents only work the Call Queue.
+  if (isAgent) {
+    return [{ href: "/dashboard/calls", label: "Call Queue" }];
+  }
   const items: NavItem[] = [
     { href: "/dashboard", label: "Overview", exact: true },
     { href: "/dashboard/calls", label: "Call Queue" },

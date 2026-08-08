@@ -34,6 +34,8 @@ export default function CompaniesPage() {
   const [error, setError] = useState<string | null>(null);
   const [lastImportCount, setLastImportCount] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [role, setRole] = useState<string | null>(null);
+  const isManager = role === "manager" || role === null;
 
   const loadCompanies = useCallback(
     async (pageOffset = 0, q = search, stage = stageFilter) => {
@@ -69,6 +71,13 @@ export default function CompaniesPage() {
   useEffect(() => {
     void loadCompanies(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((d) => setRole(d?.profile?.role ?? null))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -190,26 +199,32 @@ export default function CompaniesPage() {
             ? ` · showing ${offset + 1}–${offset + companies.length}`
             : ""}
         </p>
-        <div className="flex items-center gap-3">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleUpload(file);
-            }}
-          />
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={uploading}
-            onClick={() => fileRef.current?.click()}
-          >
-            {uploading ? "Importing..." : "Upload CSV / Excel"}
-          </button>
-        </div>
+        {isManager ? (
+          <div className="flex items-center gap-3">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleUpload(file);
+              }}
+            />
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
+            >
+              {uploading ? "Importing..." : "Upload CSV / Excel"}
+            </button>
+          </div>
+        ) : (
+          <p className="font-mono text-xs text-muted">
+            Only sales managers can upload leads.
+          </p>
+        )}
       </div>
 
       <div className="mb-4 flex flex-wrap gap-3">
