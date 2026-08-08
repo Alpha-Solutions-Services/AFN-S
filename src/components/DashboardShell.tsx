@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { NotificationsBell } from "@/components/NotificationsBell";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -72,8 +73,9 @@ export function DashboardShell({
         </div>
       </aside>
       <main className="flex flex-1 flex-col">
-        <header className="border-b border-border px-8 py-5">
+        <header className="flex items-center justify-between border-b border-border px-8 py-5">
           <h1 className="text-lg font-semibold text-text">{title}</h1>
+          <NotificationsBell />
         </header>
         <div className="flex-1 p-8">{children}</div>
       </main>

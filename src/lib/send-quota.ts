@@ -27,8 +27,8 @@ export function getDailySendCap(now = new Date()): number {
     return WARMUP_CAPS[Math.min(day, WARMUP_CAPS.length - 1)];
   }
 
-  // Safer default until warm-up start is configured
-  return 20;
+  // Per-mailbox default: 10/day/mailbox to start (10 forces = ~100/day total)
+  return 10;
 }
 
 export function getWarmupDayIndex(now = new Date()): number | null {

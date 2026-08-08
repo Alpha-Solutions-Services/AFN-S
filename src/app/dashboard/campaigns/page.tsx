@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { useUi } from "@/components/ui/UiProvider";
 import { readJsonResponse } from "@/lib/fetch-json";
+import { SALES_TEAMS } from "@/lib/mailboxes";
 import { DEFAULT_CAMPAIGN_OFFER } from "@/lib/talk-track";
 import type { Campaign } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ function CampaignsForm() {
   const [targetFilter, setTargetFilter] = useState<"not_contacted" | "all">(
     "not_contacted"
   );
+  const [team, setTeam] = useState<string>("");
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -92,6 +94,7 @@ function CampaignsForm() {
           name,
           offer_description: offerDescription,
           target_filter: targetFilter,
+          team: team || null,
           ...(companyId ? { company_ids: [companyId] } : {}),
         }),
       });
@@ -110,6 +113,7 @@ function CampaignsForm() {
       setName("");
       setOfferDescription("");
       setTargetFilter("not_contacted");
+      setTeam("");
       await loadCampaigns();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed");
@@ -176,6 +180,25 @@ function CampaignsForm() {
                 </div>
               </div>
             ) : null}
+            <div>
+              <label className="data-label mb-1 block">Sending team (Force)</label>
+              <select
+                className="input"
+                value={team}
+                onChange={(e) => setTeam(e.target.value)}
+              >
+                <option value="">Round-robin — spread across all 10 Forces</option>
+                {SALES_TEAMS.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.emoji} {t.name} — {t.email}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted">
+                Emails send from the team mailbox and CC the AFN hub
+                (sales.afn.alpha). Each mailbox has its own daily cap.
+              </p>
+            </div>
             <button type="submit" className="btn-primary" disabled={creating}>
               {creating ? "Creating..." : "Create campaign"}
             </button>

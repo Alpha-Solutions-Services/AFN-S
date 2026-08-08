@@ -56,7 +56,9 @@ export async function sendSalesEmail(opts: {
   openTrackingUrl?: string;
   freightClickUrl?: string;
   unsubscribeUrl?: string;
-}): Promise<{ messageId: string }> {
+  /** Team mailbox to send from (10 Forces). Falls back to legacy single mailbox. */
+  mailbox?: { email: string; appPassword: string; name?: string };
+}): Promise<{ messageId: string; mailbox: string }> {
   const to = opts.to.trim().toLowerCase();
   if (!to || isSyntheticEmail(to)) {
     throw new Error(
@@ -64,8 +66,12 @@ export async function sendSalesEmail(opts: {
     );
   }
 
-  const auth = getSmtpAuth();
-  const from = getSalesMailFrom();
+  const auth = opts.mailbox
+    ? { user: opts.mailbox.email.trim().toLowerCase(), pass: opts.mailbox.appPassword }
+    : getSmtpAuth();
+  const from = opts.mailbox
+    ? opts.mailbox.email.trim().toLowerCase()
+    : getSalesMailFrom();
   const fromName = getSalesMailFromName();
   const replyTo = getSalesReplyTo();
   const cc = getSalesCc();
@@ -116,12 +122,44 @@ export async function sendSalesEmail(opts: {
     })
       .compile()
       .build();
-    await appendToGmailSent(raw);
+    await appendToGmailSent(raw, auth);
   } catch {
     // Delivered via SMTP — don't fail the send if Sent-folder append fails
   }
 
-  return { messageId };
+  return { messageId, mailbox: from };
+}
+
+/**
+ * Internal, non-tracked alert email sent from the hub mailbox
+ * (sales.afn.alpha). Used for open/reply notifications to the team + hub.
+ */
+export async function sendInternalAlert(opts: {
+  to: string[];
+  subject: string;
+  body: string;
+}): Promise<void> {
+  const auth = getSmtpAuth(); // hub credentials
+  const from = getSalesMailFrom();
+  const recipients = Array.from(
+    new Set(opts.to.map((r) => r.trim().toLowerCase()).filter(Boolean))
+  );
+  if (recipients.length === 0) return;
+
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
+    auth,
+  });
+
+  await transporter.sendMail({
+    from: `"AFN Alerts" <${from}>`,
+    to: recipients,
+    subject: opts.subject,
+    text: opts.body,
+    headers: { "X-Mailer": "Alpha Sales Point" },
+  });
 }
 
 export function sleep(ms: number): Promise<void> {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { IMPORT_BATCH_SIZE } from "@/lib/import-batch";
+import { getTeam } from "@/lib/mailboxes";
 
 export async function GET() {
   const auth = await requireUser();
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
     offer_description?: string;
     target_filter?: "not_contacted" | "all";
     company_ids?: string[];
+    team?: string | null;
   };
 
   try {
@@ -52,6 +54,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Campaign name is required" }, { status: 400 });
   }
 
+  // null / empty team = round-robin across the configured 10 Forces
+  const team = body.team && getTeam(body.team) ? body.team : null;
+
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns")
     .insert({
@@ -60,6 +65,7 @@ export async function POST(request: Request) {
       offer_description: offerDescription,
       target_filter: companyIds.length > 0 ? "all" : targetFilter,
       status: "draft",
+      team,
     })
     .select("*")
     .single();

@@ -52,6 +52,7 @@ export interface Campaign {
   offer_description: string;
   status: CampaignStatus;
   target_filter: "not_contacted" | "all";
+  team?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -74,6 +75,8 @@ export interface CampaignTarget {
   next_follow_up_at?: string | null;
   subject_variant?: string | null;
   click_count?: number;
+  sent_mailbox?: string | null;
+  open_alerted_at?: string | null;
   last_event_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -94,6 +97,7 @@ export interface EmailLog {
   success: boolean;
   gmail_message_id: string | null;
   error_message: string | null;
+  mailbox?: string | null;
   created_at: string;
 }
 

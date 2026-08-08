@@ -8,8 +8,14 @@ import {
 } from "@/lib/deliverability";
 import { ensureSalesSignature } from "@/lib/email-signature";
 import { validateOutboundEmailWithMx } from "@/lib/email-validate";
-import { isSalesMailConfigured, sendSalesEmail } from "@/lib/mail";
-import { getSendQuota } from "@/lib/send-quota";
+import { sendSalesEmail } from "@/lib/mail";
+import {
+  getMailboxQuota,
+  pickRoundRobinMailbox,
+  resolveMailboxByEmail,
+  resolveMailboxByTeam,
+  type ResolvedMailbox,
+} from "@/lib/mailboxes";
 import { getServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildClickTrackingUrl, buildOpenTrackingUrl } from "@/lib/tracking";
 
@@ -74,13 +80,6 @@ export async function POST(request: Request) {
   if ("error" in auth) return auth.error;
   const { supabase, user } = auth;
 
-  if (!isSalesMailConfigured()) {
-    return NextResponse.json(
-      { error: "Sales mailbox not configured" },
-      { status: 503 }
-    );
-  }
-
   const admin = getServiceRoleClient();
   if (!admin) {
     return NextResponse.json({ error: "Service role not configured" }, { status: 503 });
@@ -94,23 +93,6 @@ export async function POST(request: Request) {
   }
   if (!body.targetId) {
     return NextResponse.json({ error: "targetId is required" }, { status: 400 });
-  }
-
-  let quota;
-  try {
-    quota = await getSendQuota(supabase, user.id);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Quota check failed";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-  if (quota.remaining <= 0) {
-    return NextResponse.json(
-      {
-        error: `Daily send cap reached (${quota.sentToday}/${quota.cap}).`,
-        quota,
-      },
-      { status: 429 }
-    );
   }
 
   const nowIso = new Date().toISOString();
@@ -129,8 +111,9 @@ export async function POST(request: Request) {
       replied_at,
       bounced_at,
       status,
+      sent_mailbox,
       companies ( name, email, do_not_email ),
-      campaigns!inner ( owner_id )
+      campaigns!inner ( owner_id, team )
     `
     )
     .eq("id", body.targetId)
@@ -140,6 +123,36 @@ export async function POST(request: Request) {
   if (error || !target) {
     return NextResponse.json({ error: "Target not found" }, { status: 404 });
   }
+
+  // Reuse the original sending mailbox for thread consistency, else team, else round-robin.
+  const campaignForTarget = Array.isArray(target.campaigns)
+    ? target.campaigns[0]
+    : target.campaigns;
+  const teamKey = (campaignForTarget as { team?: string | null } | null)?.team ?? null;
+  let mailbox: ResolvedMailbox | null =
+    resolveMailboxByEmail((target as { sent_mailbox?: string | null }).sent_mailbox) ||
+    (teamKey ? resolveMailboxByTeam(teamKey) : null);
+  if (!mailbox) {
+    mailbox = await pickRoundRobinMailbox(admin);
+  }
+  if (!mailbox) {
+    return NextResponse.json(
+      { error: "No team mailbox has quota left today (or none configured)." },
+      { status: 429 }
+    );
+  }
+
+  const mailboxQuota = await getMailboxQuota(admin, mailbox.email);
+  if (mailboxQuota.remaining <= 0) {
+    return NextResponse.json(
+      {
+        error: `${mailbox.name} daily cap reached (${mailboxQuota.sentToday}/${mailboxQuota.cap}).`,
+        quota: mailboxQuota,
+      },
+      { status: 429 }
+    );
+  }
+  const quota = { ...mailboxQuota, warmupDay: null as number | null };
 
   if (
     target.status !== "sent" ||
@@ -198,6 +211,11 @@ export async function POST(request: Request) {
       openTrackingUrl: buildOpenTrackingUrl(trackingToken),
       freightClickUrl: buildClickTrackingUrl(trackingToken),
       unsubscribeUrl: buildUnsubscribeUrl(trackingToken),
+      mailbox: {
+        email: mailbox.email,
+        appPassword: mailbox.appPassword,
+        name: mailbox.name,
+      },
     });
 
     const follow = nextFollowUpAfterSend(nextStep);
@@ -208,7 +226,7 @@ export async function POST(request: Request) {
         follow_up_step: nextStep,
         next_follow_up_at: follow.next_follow_up_at,
         last_event_at: nowIso,
-        // Keep original subject for matching; store follow-up in error_message? No — leave as-is
+        sent_mailbox: mailbox.email,
       })
       .eq("id", target.id);
 
@@ -221,6 +239,7 @@ export async function POST(request: Request) {
       subject,
       success: true,
       gmail_message_id: messageId,
+      mailbox: mailbox.email,
     });
 
     return NextResponse.json({

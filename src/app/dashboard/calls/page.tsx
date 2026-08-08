@@ -4,9 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
 import { StageBadge } from "@/components/StageBadge";
+import { buildCallScript } from "@/lib/call-script";
 import { readJsonResponse } from "@/lib/fetch-json";
 import { isSyntheticEmail, normalizeUsPhone } from "@/lib/phone";
-import { DEFAULT_CAMPAIGN_OFFER, DISPATCH_TALK_TRACK } from "@/lib/talk-track";
+import { DEFAULT_CAMPAIGN_OFFER } from "@/lib/talk-track";
 import type { CallOutcome, Company } from "@/lib/types";
 import { CALL_OUTCOME_LABELS, CALL_OUTCOMES } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -66,6 +67,14 @@ export default function CallQueuePage() {
   const current = queue[index] ?? null;
   const phone = useMemo(
     () => (current ? normalizeUsPhone(current.phone) : null),
+    [current]
+  );
+  const script = useMemo(
+    () =>
+      buildCallScript({
+        company: current?.name ?? null,
+        contact: current?.contact_name ?? null,
+      }),
     [current]
   );
 
@@ -392,39 +401,96 @@ export default function CallQueuePage() {
           </div>
 
           <aside className="panel p-6">
-            <p className="data-label">Talk track</p>
+            <p className="data-label">Live call script</p>
             <h3 className="mt-1 text-sm font-semibold text-text">
-              Alpha dispatch pitch
+              Read it out loud — capture answers in Call notes
             </h3>
-            <ul className="mt-4 space-y-4 text-sm text-muted">
-              <li>
-                <span className="font-medium text-text">Who: </span>
-                {DISPATCH_TALK_TRACK.who}
-              </li>
-              <li>
-                <span className="font-medium text-text">What: </span>
-                {DISPATCH_TALK_TRACK.what}
-              </li>
-              <li>
-                <span className="font-medium text-text">Fee: </span>
-                {DISPATCH_TALK_TRACK.fee}
-              </li>
-              <li>
-                <span className="font-medium text-text">Ask: </span>
-                {DISPATCH_TALK_TRACK.ask}
-              </li>
-              <li>
-                <span className="font-medium text-text">Google Voice: </span>
-                {DISPATCH_TALK_TRACK.googleVoice} (call / text — primary)
-              </li>
-              <li>
-                <span className="font-medium text-text">Close: </span>
-                {DISPATCH_TALK_TRACK.close}
-              </li>
-            </ul>
+
+            <ScriptSection title="1 · Open the call" tone="accent">
+              {script.opening.map((s) => (
+                <ScriptLine key={s.label} label={s.label} say={s.say} />
+              ))}
+            </ScriptSection>
+
+            <ScriptSection title="2 · Discovery — capture these">
+              {script.discovery.map((s) => (
+                <ScriptLine
+                  key={s.label}
+                  label={s.label}
+                  say={s.say}
+                  capture={s.capture}
+                />
+              ))}
+            </ScriptSection>
+
+            <ScriptSection title="3 · The offer (dispatch %)">
+              {script.offer.map((s) => (
+                <ScriptLine key={s.label} label={s.label} say={s.say} />
+              ))}
+            </ScriptSection>
+
+            <ScriptSection title="4 · If they push back">
+              {script.objections.map((o) => (
+                <ScriptLine key={o.when} label={o.when} say={o.say} />
+              ))}
+            </ScriptSection>
+
+            <ScriptSection title="5 · Close + send onboarding form" tone="accent">
+              {script.close.map((s) => (
+                <ScriptLine key={s.label} label={s.label} say={s.say} />
+              ))}
+            </ScriptSection>
           </aside>
         </div>
       )}
     </DashboardShell>
+  );
+}
+
+function ScriptSection({
+  title,
+  tone,
+  children,
+}: {
+  title: string;
+  tone?: "accent";
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="mt-5">
+      <p
+        className={cn(
+          "text-xs font-semibold uppercase tracking-widest",
+          tone === "accent" ? "text-accent" : "text-muted"
+        )}
+      >
+        {title}
+      </p>
+      <div className="mt-2 space-y-3">{children}</div>
+    </div>
+  );
+}
+
+function ScriptLine({
+  label,
+  say,
+  capture,
+}: {
+  label: string;
+  say: string;
+  capture?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-bg/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-text">{label}</span>
+        {capture ? (
+          <span className="rounded border border-accent/40 px-1.5 py-0.5 font-mono text-[10px] uppercase text-accent">
+            {capture}
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-1 text-sm leading-relaxed text-muted">“{say}”</p>
+    </div>
   );
 }

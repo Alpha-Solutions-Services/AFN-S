@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { computeAbOpenRates } from "@/lib/deliverability";
+import { getTeam } from "@/lib/mailboxes";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -111,6 +112,42 @@ export async function GET(
     stats,
     abStats,
   });
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: { id: string } }
+) {
+  const auth = await requireUser();
+  if ("error" in auth) return auth.error;
+  const { supabase, user } = auth;
+  const { id } = params;
+
+  let body: { team?: string | null } = {};
+  try {
+    body = await request.json().catch(() => ({}));
+  } catch {
+    // ignore
+  }
+
+  const team = body.team && getTeam(body.team) ? body.team : null;
+
+  const { data, error } = await supabase
+    .from("campaigns")
+    .update({ team })
+    .eq("id", id)
+    .eq("owner_id", user.id)
+    .select("*")
+    .single();
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  if (!data) {
+    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  }
+
+  return NextResponse.json({ campaign: data });
 }
 
 export async function DELETE(

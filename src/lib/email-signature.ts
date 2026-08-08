@@ -6,8 +6,8 @@ export const GOOGLE_VOICE_NUMBER = "8593635897";
 export const GOOGLE_VOICE_DISPLAY = "(859) 363-5897";
 export const SALES_SENDER_NAME = "Alpha Freight Network";
 export const SALES_REPLY_TO = "mikran.dispatch@gmail.com";
-export const SALES_CC = "kevin.afn.dispatch@gmail.com";
-export const SALES_FREIGHT_URL = "https://www.alphasolutions.software/freight";
+export const SALES_CC = "sales.afn.alpha@gmail.com";
+export const SALES_FREIGHT_URL = "https://afn.alphasolutions.software";
 export const SALES_WEBSITE_HOST = "alphasolutions.software";
 
 /** Full pitch facts — drafts must stay inside this product truth. */

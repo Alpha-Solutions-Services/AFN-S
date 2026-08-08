@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { HUB_EMAIL } from "@/lib/mailboxes";
+import { sendInternalAlert } from "@/lib/mail";
 import { getServiceRoleClient } from "@/lib/supabase/service-role";
 import { TRACKING_PIXEL_GIF } from "@/lib/tracking";
 
@@ -32,7 +34,9 @@ export async function GET(
 
   const { data: target } = await admin
     .from("campaign_targets")
-    .select("id, campaign_id, company_id, open_count, opened_at, campaigns(owner_id)")
+    .select(
+      "id, campaign_id, company_id, open_count, opened_at, open_alerted_at, sent_mailbox, companies(name), campaigns(owner_id, name)"
+    )
     .eq("tracking_token", token)
     .maybeSingle();
 
@@ -71,6 +75,50 @@ export async function GET(
       .update({ stage: "opened" })
       .eq("id", target.company_id)
       .in("stage", ["emailed", "not_contacted", "attempted"]);
+  }
+
+  // First open only → in-app notification + email alert to team mailbox + hub.
+  if (!(target as { open_alerted_at?: string | null }).open_alerted_at) {
+    const company = Array.isArray(target.companies)
+      ? target.companies[0]
+      : target.companies;
+    const companyName =
+      (company as { name?: string } | null)?.name || "A carrier";
+    const campaignName = (campaign as { name?: string } | null)?.name || "campaign";
+
+    await admin
+      .from("campaign_targets")
+      .update({ open_alerted_at: now })
+      .eq("id", target.id);
+
+    await admin.from("notifications").insert({
+      owner_id: ownerId,
+      type: "open",
+      title: `${companyName} opened your email`,
+      body: `Campaign "${campaignName}". Good moment to call.`,
+      company_id: target.company_id,
+      campaign_id: target.campaign_id,
+      campaign_target_id: target.id,
+      meta: { mailbox: (target as { sent_mailbox?: string }).sent_mailbox ?? null },
+    });
+
+    const alertTo = [HUB_EMAIL];
+    const teamMailbox = (target as { sent_mailbox?: string | null }).sent_mailbox;
+    if (teamMailbox) alertTo.push(teamMailbox);
+
+    try {
+      await sendInternalAlert({
+        to: alertTo,
+        subject: `📬 Opened: ${companyName} — call now`,
+        body:
+          `${companyName} just opened the email from campaign "${campaignName}".\n` +
+          `Sent by: ${teamMailbox || "AFN"}\n\n` +
+          `This is a warm signal — call or text the carrier now while you're top of mind.\n\n` +
+          `— Alpha Freight Network (AFN) alerts`,
+      });
+    } catch {
+      // Never fail the pixel because an alert email failed
+    }
   }
 
   return pixel();

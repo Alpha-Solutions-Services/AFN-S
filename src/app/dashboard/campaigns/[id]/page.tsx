@@ -7,6 +7,7 @@ import { DashboardShell } from "@/components/DashboardShell";
 import { useUi } from "@/components/ui/UiProvider";
 import { GENERATION_DELAY_MS } from "@/lib/ai-email";
 import { readJsonResponse } from "@/lib/fetch-json";
+import { SALES_TEAMS } from "@/lib/mailboxes";
 import { sendDelayWithJitter, cn } from "@/lib/utils";
 import type { Campaign, CampaignTarget, TargetStatus } from "@/lib/types";
 
@@ -89,8 +90,30 @@ export default function CampaignDetailPage({
   } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [savingTeam, setSavingTeam] = useState(false);
 
   const readyToSend = stats.readyToSend;
+
+  async function handleSetTeam(nextTeam: string) {
+    setSavingTeam(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/campaigns/${params.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ team: nextTeam || null }),
+      });
+      const data = await readJsonResponse<{ campaign?: Campaign; error?: string }>(
+        res
+      );
+      if (!res.ok) throw new Error(data.error || "Failed to update team");
+      if (data.campaign) setCampaign(data.campaign);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update team");
+    } finally {
+      setSavingTeam(false);
+    }
+  }
 
   const loadCampaign = useCallback(async () => {
     setLoading(true);
@@ -716,7 +739,7 @@ export default function CampaignDetailPage({
 
         {quota ? (
           <p className="mt-3 font-mono text-xs text-muted">
-            Daily send quota: {quota.sentToday}/{quota.cap} used ·{" "}
+            Daily send quota (all Forces): {quota.sentToday}/{quota.cap} used ·{" "}
             {quota.remaining} left
             {quota.warmupDay != null ? ` · warm-up day ${quota.warmupDay}` : ""}
             {!quota.warmupDay
@@ -724,6 +747,26 @@ export default function CampaignDetailPage({
               : ""}
           </p>
         ) : null}
+
+        <div className="mt-3 flex items-center gap-2">
+          <label className="data-label">Sending team</label>
+          <select
+            className="input w-auto min-w-[16rem]"
+            value={(campaign as { team?: string | null }).team ?? ""}
+            disabled={savingTeam}
+            onChange={(e) => void handleSetTeam(e.target.value)}
+          >
+            <option value="">Round-robin — all 10 Forces</option>
+            {SALES_TEAMS.map((t) => (
+              <option key={t.key} value={t.key}>
+                {t.emoji} {t.name} — {t.email}
+              </option>
+            ))}
+          </select>
+          <span className="text-xs text-muted">
+            CC hub: sales.afn.alpha@gmail.com
+          </span>
+        </div>
 
         <div className="mt-5 flex flex-wrap items-end gap-3">
           <button

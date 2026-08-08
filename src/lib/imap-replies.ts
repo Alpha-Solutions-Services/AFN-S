@@ -198,13 +198,16 @@ export async function fetchRecentBounces(opts?: {
 /**
  * Gmail SMTP often does not place a copy in Sent for app-password SMTP.
  */
-export async function appendToGmailSent(rawRfc822: Buffer): Promise<void> {
-  const auth = getImapAuth();
+export async function appendToGmailSent(
+  rawRfc822: Buffer,
+  auth?: { user: string; pass: string }
+): Promise<void> {
+  const resolved = auth ?? getImapAuth();
   const client = new ImapFlow({
     host: "imap.gmail.com",
     port: 993,
     secure: true,
-    auth,
+    auth: resolved,
     logger: false,
   });
 

@@ -6,8 +6,13 @@ import {
 } from "@/lib/deliverability";
 import { ensureSalesSignature } from "@/lib/email-signature";
 import { validateOutboundEmailWithMx } from "@/lib/email-validate";
-import { isSalesMailConfigured, sendSalesEmail } from "@/lib/mail";
-import { getSendQuota } from "@/lib/send-quota";
+import { sendSalesEmail } from "@/lib/mail";
+import {
+  getMailboxQuota,
+  pickRoundRobinMailbox,
+  resolveMailboxByTeam,
+  type ResolvedMailbox,
+} from "@/lib/mailboxes";
 import { getServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildClickTrackingUrl, buildOpenTrackingUrl } from "@/lib/tracking";
 
@@ -42,33 +47,6 @@ export async function POST(
     return NextResponse.json({ error: "Service role not configured" }, { status: 503 });
   }
 
-  if (!isSalesMailConfigured()) {
-    return NextResponse.json(
-      {
-        error:
-          "Sales mailbox not configured. Add SALES_MAIL_APP_PASSWORD for sales.afn.alpha@gmail.com in Vercel env.",
-      },
-      { status: 503 }
-    );
-  }
-
-  let quota;
-  try {
-    quota = await getSendQuota(supabase, user.id);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Quota check failed";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-  if (quota.remaining <= 0) {
-    return NextResponse.json(
-      {
-        error: `Daily send cap reached (${quota.sentToday}/${quota.cap}). Try again tomorrow or raise DAILY_SEND_CAP.`,
-        quota,
-      },
-      { status: 429 }
-    );
-  }
-
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns")
     .select("*")
@@ -78,6 +56,45 @@ export async function POST(
   if (campaignError || !campaign) {
     return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
   }
+
+  // Resolve the sending mailbox: assigned team, else round-robin across the
+  // configured 10 Forces. The hub (sales.afn.alpha) never auto-sends.
+  const teamKey = (campaign as { team?: string | null }).team ?? null;
+  let mailbox: ResolvedMailbox | null;
+  if (teamKey) {
+    mailbox = resolveMailboxByTeam(teamKey);
+    if (!mailbox) {
+      return NextResponse.json(
+        {
+          error: `Team "${teamKey}" mailbox not configured. Add its Gmail App Password in Vercel env.`,
+        },
+        { status: 503 }
+      );
+    }
+  } else {
+    mailbox = await pickRoundRobinMailbox(admin);
+    if (!mailbox) {
+      return NextResponse.json(
+        {
+          error:
+            "No team mailbox has quota left today (or none configured). Add SALES_MAIL_<TEAM>_APP_PASSWORD or wait for the daily reset.",
+        },
+        { status: 429 }
+      );
+    }
+  }
+
+  const mailboxQuota = await getMailboxQuota(admin, mailbox.email);
+  if (mailboxQuota.remaining <= 0) {
+    return NextResponse.json(
+      {
+        error: `${mailbox.name} daily cap reached (${mailboxQuota.sentToday}/${mailboxQuota.cap}). Assign another team or wait for reset.`,
+        quota: mailboxQuota,
+      },
+      { status: 429 }
+    );
+  }
+  const quota = { ...mailboxQuota, warmupDay: null as number | null };
 
   const { data: target, error: targetError } = await supabase
     .from("campaign_targets")
@@ -168,6 +185,11 @@ export async function POST(
       openTrackingUrl: buildOpenTrackingUrl(trackingToken),
       freightClickUrl: buildClickTrackingUrl(trackingToken),
       unsubscribeUrl: buildUnsubscribeUrl(trackingToken),
+      mailbox: {
+        email: mailbox.email,
+        appPassword: mailbox.appPassword,
+        name: mailbox.name,
+      },
     });
 
     const now = new Date();
@@ -180,6 +202,7 @@ export async function POST(
         sent_at: now.toISOString(),
         error_message: null,
         tracking_token: trackingToken,
+        sent_mailbox: mailbox.email,
         follow_up_step: follow.follow_up_step,
         next_follow_up_at: follow.next_follow_up_at,
       })
@@ -200,6 +223,7 @@ export async function POST(
         subject: target.generated_subject,
         success: true,
         gmail_message_id: messageId,
+        mailbox: mailbox.email,
       });
     } catch {
       // sent — don't fail if logging fails
@@ -208,6 +232,8 @@ export async function POST(
     return NextResponse.json({
       sent: 1,
       failed: 0,
+      mailbox: mailbox.email,
+      team: mailbox.team,
       quota: {
         ...quota,
         sentToday: quota.sentToday + 1,
@@ -233,6 +259,7 @@ export async function POST(
         subject: target.generated_subject,
         success: false,
         error_message: message,
+        mailbox: mailbox.email,
       });
     } catch {
       // ignore log failure
