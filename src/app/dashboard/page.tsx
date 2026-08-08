@@ -82,6 +82,37 @@ export default function DashboardOverviewPage() {
             </div>
           </div>
 
+          <div className="panel mb-6 p-5">
+            <h2 className="mb-4 text-sm font-medium text-text">Email outcomes</h2>
+            {(() => {
+              const sent = stats.emailsSent;
+              const failed = stats.emailsFailed;
+              const max = Math.max(1, sent, failed);
+              const bars = [
+                { label: "Sent", value: sent, cls: "bg-success" },
+                { label: "Failed", value: failed, cls: "bg-danger" },
+              ];
+              return (
+                <div className="space-y-2">
+                  {bars.map((b) => (
+                    <div key={b.label} className="flex items-center gap-3 text-sm">
+                      <span className="w-16 shrink-0 text-muted">{b.label}</span>
+                      <div className="h-3 flex-1 overflow-hidden rounded bg-bg">
+                        <div
+                          className={`h-3 rounded transition-all ${b.cls}`}
+                          style={{ width: `${Math.round((b.value / max) * 100)}%` }}
+                        />
+                      </div>
+                      <span className="w-16 shrink-0 text-right font-mono text-text">
+                        {b.value.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+
           <div className="mb-6 grid gap-4 lg:grid-cols-2">
             <div className="panel p-5">
               <div className="mb-4 flex items-center justify-between">
