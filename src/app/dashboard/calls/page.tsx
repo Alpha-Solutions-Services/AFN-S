@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DashboardShell } from "@/components/DashboardShell";
+import { LiveCallAssist } from "@/components/LiveCallAssist";
 import { StageBadge } from "@/components/StageBadge";
 import { buildCallScript } from "@/lib/call-script";
 import { readJsonResponse } from "@/lib/fetch-json";
@@ -253,7 +254,9 @@ export default function CallQueuePage() {
           </Link>
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="space-y-6">
+          <LiveCallAssist companyName={current.name} />
+          <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="panel p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -441,6 +444,7 @@ export default function CallQueuePage() {
               ))}
             </ScriptSection>
           </aside>
+          </div>
         </div>
       )}
     </DashboardShell>
