@@ -62,6 +62,10 @@ export default function PeoplePage() {
   const [newIp, setNewIp] = useState("");
   const [ipLabel, setIpLabel] = useState("");
 
+  // inline password reset
+  const [resetId, setResetId] = useState<string | null>(null);
+  const [resetValue, setResetValue] = useState("");
+
   const isManager = role === "manager" || role === null;
 
   const loadAll = useCallback(async () => {
@@ -142,22 +146,39 @@ export default function PeoplePage() {
     await loadAll();
   }
 
-  async function resetPassword(p: Person) {
-    const ok = await ui.confirm({
-      title: "Reset password",
-      message: `Generate a new password for ${p.email}? You'll get a one-time password to share.`,
-      confirmLabel: "Reset",
-    });
-    if (!ok) return;
-    const next = `AFN-${Math.random().toString(36).slice(2, 8)}-${Math.random()
-      .toString(36)
-      .slice(2, 6)}`;
-    await fetch("/api/admin/agents", {
+  function openReset(p: Person) {
+    setResetId(p.id);
+    setResetValue("");
+    setMsg(null);
+    setError(null);
+  }
+
+  function generatePassword() {
+    setResetValue(
+      `Afn-${Math.random().toString(36).slice(2, 8)}-${Math.random()
+        .toString(36)
+        .slice(2, 6)}`
+    );
+  }
+
+  async function submitReset(p: Person) {
+    if (resetValue.trim().length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    const res = await fetch("/api/admin/agents", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: p.id, password: next }),
+      body: JSON.stringify({ id: p.id, password: resetValue.trim() }),
     });
-    setMsg(`New password for ${p.email}: ${next}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setError(data.error || "Failed to reset password.");
+      return;
+    }
+    setResetId(null);
+    setResetValue("");
+    setMsg(`Password updated for ${p.email}: ${resetValue.trim()}`);
   }
 
   async function addIp(e: React.FormEvent) {
@@ -365,34 +386,75 @@ export default function PeoplePage() {
               people.map((p) => (
                 <div
                   key={p.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-3"
+                  className="rounded-lg border border-border p-3"
                 >
-                  <div>
-                    <p className="text-sm text-text">
-                      {p.full_name || p.email}
-                      {p.active ? "" : " · suspended"}
-                    </p>
-                    <p className="font-mono text-xs text-muted">
-                      {p.email} · {p.role.replace("_", " ")}
-                      {p.team ? ` · ${p.team}` : ""}
-                    </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm text-text">
+                        {p.full_name || p.email}
+                        {p.active ? "" : " · suspended"}
+                      </p>
+                      <p className="font-mono text-xs text-muted">
+                        {p.email} · {p.role.replace("_", " ")}
+                        {p.team ? ` · ${p.team}` : ""}
+                      </p>
+                    </div>
+                    {isManager && p.role !== "manager" ? (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs"
+                          onClick={() => openReset(p)}
+                        >
+                          Reset pw
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs"
+                          onClick={() => void toggleActive(p)}
+                        >
+                          {p.active ? "Deactivate" : "Reactivate"}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
-                  {isManager && p.role !== "manager" ? (
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        className="btn-secondary text-xs"
-                        onClick={() => void resetPassword(p)}
-                      >
-                        Reset pw
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary text-xs"
-                        onClick={() => void toggleActive(p)}
-                      >
-                        {p.active ? "Deactivate" : "Reactivate"}
-                      </button>
+
+                  {resetId === p.id ? (
+                    <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:items-center">
+                      <input
+                        className="input min-w-0 flex-1"
+                        type="text"
+                        value={resetValue}
+                        onChange={(e) => setResetValue(e.target.value)}
+                        placeholder="New password (min 8 chars)"
+                        autoFocus
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs"
+                          onClick={generatePassword}
+                        >
+                          Generate
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-primary text-xs"
+                          onClick={() => void submitReset(p)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs"
+                          onClick={() => {
+                            setResetId(null);
+                            setResetValue("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
                   ) : null}
                 </div>
