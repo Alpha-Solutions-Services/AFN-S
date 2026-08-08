@@ -187,10 +187,92 @@ export default function PeoplePage() {
     await loadAll();
   }
 
+  const headcount = FORCES.map((f) => ({
+    team: f,
+    count: people.filter((p) => p.team === f && p.role !== "manager").length,
+  }));
+  const maxHead = Math.max(1, ...headcount.map((h) => h.count));
+  const hoursRows = [...attendance].sort((a, b) => b.weekMinutes - a.weekMinutes);
+  const maxWeek = Math.max(1, ...attendance.map((a) => a.weekMinutes));
+  const onlineCount = attendance.filter((a) => a.online).length;
+  const totalPeople = people.filter((p) => p.role !== "manager").length;
+
   return (
     <DashboardShell title="People">
       {error ? <p className="mb-4 font-mono text-xs text-danger">{error}</p> : null}
       {msg ? <p className="mb-4 font-mono text-xs text-success">{msg}</p> : null}
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <div className="panel p-4">
+          <p className="data-label">Headcount</p>
+          <p className="mt-1 text-2xl font-semibold text-text">{totalPeople}</p>
+          <p className="text-xs text-muted">agents + team leads</p>
+        </div>
+        <div className="panel p-4">
+          <p className="data-label">Online now</p>
+          <p className="mt-1 text-2xl font-semibold text-success">{onlineCount}</p>
+          <p className="text-xs text-muted">active sessions</p>
+        </div>
+        <div className="panel p-4">
+          <p className="data-label">Blocked logins</p>
+          <p className="mt-1 text-2xl font-semibold text-warning">
+            {attempts.filter((a) => !a.allowed).length}
+          </p>
+          <p className="text-xs text-muted">awaiting IP approval</p>
+        </div>
+      </div>
+
+      <div className="mb-6 grid gap-6 md:grid-cols-2">
+        <div className="panel p-6">
+          <h2 className="text-sm font-medium text-text">Headcount by Force</h2>
+          <div className="mt-4 space-y-2">
+            {headcount.map((h) => (
+              <div key={h.team} className="flex items-center gap-3">
+                <span className="w-16 shrink-0 text-xs capitalize text-muted sm:w-20">
+                  {h.team}
+                </span>
+                <div className="h-3 flex-1 overflow-hidden rounded bg-bg">
+                  <div
+                    className="h-3 rounded bg-accent transition-all"
+                    style={{ width: `${Math.round((h.count / maxHead) * 100)}%` }}
+                  />
+                </div>
+                <span className="w-6 text-right font-mono text-xs text-muted">
+                  {h.count}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel p-6">
+          <h2 className="text-sm font-medium text-text">Hours this week</h2>
+          <div className="mt-4 space-y-2">
+            {hoursRows.length === 0 ? (
+              <p className="text-sm text-muted">No sessions yet.</p>
+            ) : (
+              hoursRows.slice(0, 10).map((a) => (
+                <div key={a.id} className="flex items-center gap-3">
+                  <span className="w-20 shrink-0 truncate text-xs text-muted sm:w-28">
+                    {a.full_name || a.email}
+                  </span>
+                  <div className="h-3 flex-1 overflow-hidden rounded bg-bg">
+                    <div
+                      className={`h-3 rounded transition-all ${
+                        a.online ? "bg-success" : "bg-accent"
+                      }`}
+                      style={{ width: `${Math.round((a.weekMinutes / maxWeek) * 100)}%` }}
+                    />
+                  </div>
+                  <span className="w-14 text-right font-mono text-xs text-muted">
+                    {hrs(a.weekMinutes)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {isManager ? (
@@ -358,20 +440,20 @@ export default function PeoplePage() {
         {isManager ? (
           <div className="panel p-6">
             <h2 className="text-sm font-medium text-text">Office IPs & login approvals</h2>
-            <form onSubmit={addIp} className="mt-3 flex flex-wrap gap-2">
+            <form onSubmit={addIp} className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <input
-                className="input w-40"
+                className="input min-w-0 flex-1 sm:min-w-[9rem]"
                 value={newIp}
                 onChange={(e) => setNewIp(e.target.value)}
                 placeholder="203.0.113.10 or 203.0.113."
               />
               <input
-                className="input w-32"
+                className="input min-w-0 flex-1 sm:min-w-[7rem]"
                 value={ipLabel}
                 onChange={(e) => setIpLabel(e.target.value)}
                 placeholder="label"
               />
-              <button type="submit" className="btn-secondary">
+              <button type="submit" className="btn-secondary shrink-0">
                 Allow IP
               </button>
             </form>

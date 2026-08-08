@@ -1,8 +1,25 @@
 import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireLeadOrManager, requireManager } from "@/lib/admin-auth";
 import { classifyEmail, FORCES } from "@/lib/roles";
 
 export const runtime = "nodejs";
+
+/** Look up an existing auth user id by email (paged). */
+async function findUserIdByEmail(
+  admin: SupabaseClient,
+  email: string
+): Promise<string | null> {
+  const target = email.toLowerCase();
+  for (let page = 1; page <= 10; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error || !data?.users?.length) return null;
+    const match = data.users.find((u) => (u.email ?? "").toLowerCase() === target);
+    if (match) return match.id;
+    if (data.users.length < 200) return null;
+  }
+  return null;
+}
 
 /** List people. Managers see everyone; team leads see their team. */
 export async function GET() {
@@ -76,11 +93,26 @@ export async function POST(request: Request) {
     user_metadata: { full_name: body.full_name ?? null },
   });
 
-  if (createError || !created.user) {
-    return NextResponse.json(
-      { error: createError?.message || "Failed to create user" },
-      { status: 400 }
-    );
+  let userId = created?.user?.id ?? null;
+
+  // If the login already exists, reuse it (idempotent) instead of failing.
+  if (!userId) {
+    const existing = await findUserIdByEmail(admin, email);
+    if (existing) {
+      userId = existing;
+      if (password) {
+        await admin.auth.admin.updateUserById(existing, { password });
+      }
+    }
+  }
+
+  if (!userId) {
+    const raw = createError?.message?.trim();
+    const message =
+      raw && raw !== "{}"
+        ? raw
+        : `Could not create ${email}. It may already exist, or the email format was rejected.`;
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 
   const classified = classifyEmail(email);
@@ -88,7 +120,7 @@ export async function POST(request: Request) {
     .from("profiles")
     .upsert(
       {
-        id: created.user.id,
+        id: userId,
         email: email.toLowerCase(),
         full_name: body.full_name ?? null,
         role: role,
