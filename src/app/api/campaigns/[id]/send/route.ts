@@ -13,6 +13,7 @@ import {
   resolveMailboxByTeam,
   type ResolvedMailbox,
 } from "@/lib/mailboxes";
+import { getProfile } from "@/lib/roles";
 import { getServiceRoleClient } from "@/lib/supabase/service-role";
 import { buildClickTrackingUrl, buildOpenTrackingUrl } from "@/lib/tracking";
 
@@ -45,6 +46,14 @@ export async function POST(
   const admin = getServiceRoleClient();
   if (!admin) {
     return NextResponse.json({ error: "Service role not configured" }, { status: 503 });
+  }
+
+  const me = await getProfile(admin, user.id);
+  if (me?.role === "agent") {
+    return NextResponse.json(
+      { error: "Agents make calls only — sending email is done by team leads/managers." },
+      { status: 403 }
+    );
   }
 
   const { data: campaign, error: campaignError } = await supabase
