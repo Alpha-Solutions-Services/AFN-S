@@ -14,6 +14,26 @@ export default function LeadsPage() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropStage, setDropStage] = useState<CompanyStage | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [role, setRole] = useState<string | null>(null);
+
+  // Only managers can move cards. Team leads (and anyone else) view-only.
+  // Default to editable while the role is unknown to avoid a flash for managers.
+  const canEdit = role === null || role === "manager";
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((d) => {
+        if (active) setRole(d?.profile?.role ?? "manager");
+      })
+      .catch(() => {
+        if (active) setRole("manager");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const loadCompanies = useCallback(async () => {
     setLoading(true);
@@ -52,6 +72,7 @@ export default function LeadsPage() {
   }, [loadCompanies]);
 
   async function moveCompany(companyId: string, stage: CompanyStage) {
+    if (!canEdit) return;
     const prev = companies;
     setCompanies((list) =>
       list.map((c) => (c.id === companyId ? { ...c, stage } : c))
@@ -90,7 +111,9 @@ export default function LeadsPage() {
   return (
     <DashboardShell title="Pipeline">
       <p className="mb-4 text-sm text-muted">
-        Drag cards between columns to update stage.{" "}
+        {canEdit
+          ? "Drag cards between columns to update stage."
+          : "View only — stages are managed by sales managers."}{" "}
         {companies.length > 0 ? `${companies.length.toLocaleString()} companies loaded.` : null}
       </p>
 
@@ -112,11 +135,13 @@ export default function LeadsPage() {
                 dropStage === stage && "border-accent"
               )}
               onDragOver={(e) => {
+                if (!canEdit) return;
                 e.preventDefault();
                 setDropStage(stage);
               }}
               onDragLeave={() => setDropStage((s) => (s === stage ? null : s))}
               onDrop={(e) => {
+                if (!canEdit) return;
                 e.preventDefault();
                 const id = e.dataTransfer.getData("text/company-id") || draggingId;
                 setDropStage(null);
@@ -141,8 +166,9 @@ export default function LeadsPage() {
                   byStage[stage].map((company) => (
                     <div
                       key={company.id}
-                      draggable
+                      draggable={canEdit}
                       onDragStart={(e) => {
+                        if (!canEdit) return;
                         setDraggingId(company.id);
                         e.dataTransfer.setData("text/company-id", company.id);
                         e.dataTransfer.effectAllowed = "move";
@@ -152,7 +178,8 @@ export default function LeadsPage() {
                         setDropStage(null);
                       }}
                       className={cn(
-                        "cursor-grab rounded-lg border border-border bg-bg p-3 active:cursor-grabbing",
+                        "rounded-lg border border-border bg-bg p-3",
+                        canEdit && "cursor-grab active:cursor-grabbing",
                         draggingId === company.id && "opacity-50",
                         savingId === company.id && "opacity-60"
                       )}

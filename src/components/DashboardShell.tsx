@@ -11,23 +11,30 @@ import { cn } from "@/lib/utils";
 type NavItem = { href: string; label: string; exact?: boolean };
 
 function navForRole(role: AppRole | null): NavItem[] {
-  const isAgent = role === "agent";
-  const isManagerOrLead = !role || role === "manager" || role === "team_lead";
   // Sales agents only work the Call Queue.
-  if (isAgent) {
+  if (role === "agent") {
     return [{ href: "/dashboard/calls", label: "Call Queue" }];
   }
-  const items: NavItem[] = [
+  // Team leads: shared Call Queue + Campaigns + view-only Pipeline + their Team.
+  if (role === "team_lead") {
+    return [
+      { href: "/dashboard/calls", label: "Call Queue" },
+      { href: "/dashboard/campaigns", label: "Campaigns" },
+      { href: "/dashboard/leads", label: "Pipeline" },
+      { href: "/dashboard/team", label: "Team" },
+    ];
+  }
+  // Managers (and unknown/pre-migration) get the full console.
+  return [
     { href: "/dashboard", label: "Overview", exact: true },
     { href: "/dashboard/calls", label: "Call Queue" },
     { href: "/dashboard/companies", label: "Companies" },
+    { href: "/dashboard/campaigns", label: "Campaigns" },
+    { href: "/dashboard/leads", label: "Pipeline" },
+    { href: "/dashboard/team", label: "Team" },
+    { href: "/dashboard/people", label: "People" },
+    { href: "/dashboard/settings", label: "Settings" },
   ];
-  if (!isAgent) items.push({ href: "/dashboard/campaigns", label: "Campaigns" });
-  items.push({ href: "/dashboard/leads", label: "Pipeline" });
-  items.push({ href: "/dashboard/team", label: "Team" });
-  if (isManagerOrLead) items.push({ href: "/dashboard/people", label: "People" });
-  if (!isAgent) items.push({ href: "/dashboard/settings", label: "Settings" });
-  return items;
 }
 
 export function DashboardShell({

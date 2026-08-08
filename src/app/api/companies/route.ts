@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { isCompanyStage } from "@/lib/stages";
+import { getServiceRoleClient } from "@/lib/supabase/service-role";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
@@ -9,6 +10,12 @@ export async function GET(request: Request) {
   const auth = await requireUser();
   if ("error" in auth) return auth.error;
   const { supabase } = auth;
+
+  // Companies are one shared org lead pool. Read it via the service role so
+  // team leads (and other staff) can view the whole Pipeline, not just rows
+  // they own. Editing stays manager-only (enforced in the [id] route).
+  const admin = getServiceRoleClient();
+  const db = admin ?? supabase;
 
   const { searchParams } = new URL(request.url);
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
@@ -19,7 +26,7 @@ export async function GET(request: Request) {
   const q = searchParams.get("q")?.trim() ?? "";
   const stage = searchParams.get("stage")?.trim() ?? "";
 
-  let query = supabase
+  let query = db
     .from("companies")
     .select("*", { count: "exact" })
     .order("name", { ascending: true });

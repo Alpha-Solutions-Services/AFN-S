@@ -17,6 +17,7 @@ type Row = {
 
 export default function TeamPage() {
   const [rows, setRows] = useState<Row[]>([]);
+  const [scope, setScope] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,6 +29,7 @@ export default function TeamPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load");
       setRows(data.rows ?? []);
+      setScope(data.scope ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load");
     } finally {
@@ -39,12 +41,15 @@ export default function TeamPage() {
     void load();
   }, [load]);
 
+  const teamLabel = rows.find((r) => r.team)?.team ?? null;
+  const heading =
+    scope === "team_lead"
+      ? `${teamLabel ? teamLabel[0].toUpperCase() + teamLabel.slice(1) : "Your"} force — last 30 days. Ranked by won, then interested, then calls.`
+      : "10 Forces leaderboard — last 30 days. Ranked by won, then interested, then calls.";
+
   return (
     <DashboardShell title="Team">
-      <p className="mb-4 text-sm text-muted">
-        10 Forces leaderboard — last 30 days. Ranked by won, then interested, then
-        calls.
-      </p>
+      <p className="mb-4 text-sm text-muted">{heading}</p>
       {error ? <p className="mb-4 font-mono text-xs text-danger">{error}</p> : null}
       {loading ? (
         <p className="text-sm text-muted">Loading…</p>

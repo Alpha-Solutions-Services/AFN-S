@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { isCompanyStage } from "@/lib/stages";
+import { getServiceRoleClient } from "@/lib/supabase/service-role";
+import { getProfile } from "@/lib/roles";
 
 export async function PATCH(
   request: Request,
@@ -9,6 +11,16 @@ export async function PATCH(
   const auth = await requireUser();
   if ("error" in auth) return auth.error;
   const { supabase, user } = auth;
+
+  // Pipeline is view-only for team leads and agents. Only managers edit leads.
+  const admin = getServiceRoleClient();
+  const profile = admin ? await getProfile(admin, user.id) : null;
+  if (profile && profile.role !== "manager") {
+    return NextResponse.json(
+      { error: "Pipeline is view-only for your role. Ask a sales manager to update stages." },
+      { status: 403 }
+    );
+  }
 
   const id = params.id;
   if (!id) {
@@ -69,13 +81,12 @@ export async function PATCH(
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from("companies")
-    .update(updates)
-    .eq("id", id)
-    .eq("owner_id", user.id)
-    .select("*")
-    .single();
+  // Managers edit the shared pool via the service role (leads may be owned by
+  // the other manager). Fall back to the RLS session client if unavailable.
+  const writeQuery = admin
+    ? admin.from("companies").update(updates).eq("id", id)
+    : supabase.from("companies").update(updates).eq("id", id).eq("owner_id", user.id);
+  const { data, error } = await writeQuery.select("*").single();
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
